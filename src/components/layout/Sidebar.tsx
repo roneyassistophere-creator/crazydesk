@@ -12,17 +12,19 @@ import {
   Calendar,
   Wrench,
   LogOut,
-  UserCircle // Import UserCircle for My Account
+  UserCircle,
+  Settings
 } from 'lucide-react';
 import ThemeController from './ThemeController';
-import { useAuth } from '@/context/AuthContext'; // Import useAuth
-import { useRouter } from 'next/navigation'; // Import useRouter
+import { useAuth } from '@/context/AuthContext';
+import { useRouter } from 'next/navigation';
+import { ChevronDown, RefreshCw } from 'lucide-react';
+import { UserRole } from '@/types/auth';
 
 const menuItems = [
   { name: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
-  { name: 'My Account', icon: UserCircle, href: '/my-account' }, // Add My Account
+  { name: 'My Account', icon: UserCircle, href: '/my-account' },
   { name: 'Task Manager', icon: CheckSquare, href: '/tasks' },
-
   { name: 'Team Availability', icon: Users, href: '/team-availability' },
   { name: 'Reporting', icon: BarChart, href: '/reporting' },
   { name: 'Communication', icon: MessageSquare, href: '/communication' },
@@ -34,7 +36,7 @@ const menuItems = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, profile, switchRole } = useAuth();
 
   const handleLogout = async () => {
     try {
@@ -45,18 +47,104 @@ export default function Sidebar() {
     }
   };
 
+  const handleRoleSwitch = async (role: UserRole) => {
+    try {
+      await switchRole(role);
+      // Wait for update or redirect if needed
+      if (pathname === '/dashboard') {
+        router.push('/dashboard'); 
+      }
+    } catch (error) {
+      console.error('Failed to switch role', error);
+    }
+  };
+
+  // Add Settings to menu only for ADMIN
+  const allMenuItems = profile?.role === 'ADMIN' 
+    ? [
+        ...menuItems.slice(0, 8), 
+        { name: 'Settings', icon: Settings, href: '/settings' },
+        ...menuItems.slice(8)
+      ]
+    : menuItems;
+
+  const allowedRoles = profile?.allowedRoles || [];
+  const hasMultipleRoles = allowedRoles.length > 1;
+
   return (
     <div className="flex flex-col h-screen w-64 bg-base-200 text-base-content shadow-xl">
       <div className="p-6 border-b border-base-300">
         <h1 className="text-2xl font-bold text-primary">
           Crazy Desk
         </h1>
-        <p className="text-xs text-base-content/70 mt-1 uppercase tracking-wider">Assistophere Team</p>
+        <div className="flex flex-col gap-2 mt-4 px-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase text-base-content/50">Role</span>
+            {profile && (
+              <div className={`badge badge-sm whitespace-nowrap overflow-hidden text-ellipsis max-w-30 ${
+                profile.role === 'ADMIN' ? 'badge-error' : 
+                profile.role === 'MANAGER' ? 'badge-secondary' : 
+                'badge-accent'
+              }`}>
+                {profile.role === 'TEAM_MEMBER' ? 'Team Member' : profile.role}
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {hasMultipleRoles && (
+          <div className="px-2 mt-2">
+            {allowedRoles.length === 2 ? (
+              <button 
+                onClick={() => {
+                  const otherRole = allowedRoles.find(r => r !== profile?.role);
+                  if (otherRole) handleRoleSwitch(otherRole);
+                }}
+                className="btn btn-sm btn-outline w-full gap-2 text-xs h-auto py-2"
+              >
+                <RefreshCw size={12} className="shrink-0" />
+                <span className="truncate">
+                  Switch to {(() => {
+                    const r = allowedRoles.find(role => role !== profile?.role);
+                    if (r === 'TEAM_MEMBER') return 'Team Member';
+                    if (r === 'MANAGER') return 'Manager';
+                    if (r === 'ADMIN') return 'Admin';
+                    return r; // Fallback
+                  })()}
+                </span>
+              </button>
+            ) : (
+              <div className="dropdown dropdown-bottom dropdown-end w-full">
+                <div tabIndex={0} role="button" className="btn btn-sm btn-outline w-full gap-2 justify-between text-xs">
+                  <span className="flex items-center gap-2 truncate">
+                    <RefreshCw size={12} className="shrink-0" />
+                    Switch Role
+                  </span>
+                  <ChevronDown size={14} className="shrink-0" />
+                </div>
+                <ul tabIndex={0} className="dropdown-content z-1 menu p-2 shadow bg-base-100 rounded-box w-52 mt-1 border border-base-300">
+                  {allowedRoles.map((role) => (
+                    role !== profile?.role && (
+                      <li key={role}>
+                        <button 
+                          onClick={() => handleRoleSwitch(role)}
+                          className="text-xs"
+                        >
+                          Switch to {role === 'TEAM_MEMBER' ? 'Team Member' : role}
+                        </button>
+                      </li>
+                    )
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <nav className="flex-1 overflow-y-auto py-6">
         <ul className="space-y-2 px-4">
-          {menuItems.map((item) => {
+          {allMenuItems.map((item) => {
             const isActive = pathname === item.href;
             return (
               <li key={item.name}>

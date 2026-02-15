@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import Sidebar from "@/components/layout/Sidebar";
+import ClientLayout from "@/components/layout/ClientLayout";
+import { AuthProvider } from "@/context/AuthContext";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,9 +18,6 @@ export const metadata: Metadata = {
   title: "Crazy Desk | Assistophere",
   description: "Team management system for Assistophere",
 };
-
-import ClientLayout from "@/components/layout/ClientLayout";
-import { AuthProvider } from "@/context/AuthContext";
 
 export default function RootLayout({
   children,

@@ -1,22 +1,24 @@
 'use client';
 import { useState } from 'react';
 import { createUserWithEmailAndPassword, updateProfile, signInWithPopup } from 'firebase/auth';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { auth, db, googleProvider } from '@/lib/firebase/config';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 const ROLES = [
-  'ADMIN', 'MANAGER', 'EMPLOYEE', 'CLIENT'
+  { value: 'MANAGER', label: 'Manager' },
+  { value: 'TEAM_MEMBER', label: 'Team Member' },
 ];
 
 export default function Signup() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [role, setRole] = useState('EMPLOYEE');
+  const [role, setRole] = useState('TEAM_MEMBER');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [signupComplete, setSignupComplete] = useState(false);
   const router = useRouter();
 
   const handleGoogleSignup = async () => {
@@ -26,27 +28,31 @@ export default function Signup() {
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
       
-      // If new user, create profile with default role (e.g., EMPLOYEE or just basic)
-      // Since we can't easily know if they are new without checking db, 
-      // we might overwrite or merge.
-      // Firestore setDoc with merge: true is safer.
       const userRef = doc(db, "users", user.uid);
-      // We only want to set if it doesn't exist, effectively.
-      // Or just update last login.
-      // For now, let's just create ensuring role is set if not present.
-      // Actually standard Set with merge is good.
-      await setDoc(userRef, {
-        uid: user.uid,
-        email: user.email,
+      const userSnap = await getDoc(userRef);
+
+      const userData: any = {
         displayName: user.displayName,
-        // Don't overwrite role if exists, use merge. 
-        // But if new, we need a role.
-        // This logic is tricky without reading.
-        // Let's assume on signup page, they explicitly chose google to signup.
-        // We could default role to EMPLOYEE if not set.
-      }, { merge: true });
+        email: user.email,
+        role: role,
+        status: 'pending',
+      };
+
+      if (userSnap.exists()) {
+        const currentData = userSnap.data();
+        const currentRequested = currentData.requestedRoles || (currentData.role ? [currentData.role] : []);
+        const newRequested = Array.from(new Set([...currentRequested, role]));
+        userData.requestedRoles = newRequested;
+        // Don't overwrite createdAt for existing users
+      } else {
+        userData.uid = user.uid;
+        userData.requestedRoles = [role];
+        userData.createdAt = serverTimestamp();
+      }
+
+      await setDoc(userRef, userData, { merge: true });
       
-      router.push('/dashboard');
+      setSignupComplete(true);
     } catch (err: any) {
       setError(err.message || 'Google sign up failed');
     } finally {
@@ -65,22 +71,61 @@ export default function Signup() {
 
       await updateProfile(user, { displayName });
 
-      // Create user document in Firestore
-      await setDoc(doc(db, "users", user.uid), {
-        uid: user.uid,
-        email: user.email,
-        displayName,
-        role,
-        createdAt: serverTimestamp(),
-      });
+      const userRef = doc(db, "users", user.uid);
+      const userSnap = await getDoc(userRef);
+      
+      const emailUserData = {
+         uid: user.uid,
+         email: user.email,
+         displayName,
+         role,
+         requestedRoles: [role],
+         status: 'pending',
+         createdAt: serverTimestamp(),
+      };
 
-      router.push('/dashboard');
+      if (userSnap.exists()) {
+        const currentData = userSnap.data();
+        const currentRequested = currentData.requestedRoles || (currentData.role ? [currentData.role] : []);
+        // Only add if not already present
+        const newRequested = Array.from(new Set([...currentRequested, role]));
+        
+        await setDoc(userRef, {
+            requestedRoles: newRequested,
+            // If user was previously rejected or approved, set back to pending to notify admin
+            status: 'pending'
+        }, { merge: true });
+      } else {
+        await setDoc(userRef, emailUserData);
+      }
+
+      setSignupComplete(true);
     } catch (err: any) {
       setError(err.message || 'Failed to sign up');
     } finally {
       setLoading(false);
     }
   };
+
+  // Show pending approval screen after signup
+  if (signupComplete) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-base-200">
+        <div className="card w-96 bg-base-100 shadow-xl">
+          <div className="card-body text-center">
+            <div className="text-6xl mb-4">⏳</div>
+            <h2 className="card-title justify-center text-2xl font-bold mb-2">Request Submitted!</h2>
+            <p className="text-base-content/70 mb-4">
+              Your signup request has been sent to the admin for approval. You'll be able to access the system once approved.
+            </p>
+            <Link href="/" className="btn btn-primary">
+              Back to Home
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-base-200">
@@ -141,7 +186,7 @@ export default function Signup() {
                 onChange={(e) => setRole(e.target.value)}
               >
                 {ROLES.map((r) => (
-                  <option key={r} value={r}>{r}</option>
+                  <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
               </select>
             </div>

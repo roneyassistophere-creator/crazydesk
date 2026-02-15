@@ -4,40 +4,15 @@ import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '@/lib/firebase/config';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '@/context/AuthContext';
+import { UserRole } from '@/types/auth';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [selectedRole, setSelectedRole] = useState<UserRole>('TEAM_MEMBER');
   const router = useRouter();
-  const { createProfile } = useAuth();
-
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-      
-      // Check if profile exists, if not create default one
-      // We can rely on AuthContext but for immediate check let's do safe creation attempt or check
-      // Actually AuthContext handles fetching profile. If it's null, we might want to create it.
-      // But here we can just create if not exists.
-      // To be safe, let's just create a profile if it's a new user.
-      // But we don't know if it's new easily without checking db.
-      // Simplified: After sign in, redirect. Sidebar/AuthContext will handle data fetching.
-      // Improving: If new user, they need a role. Default to EMPLOYEE?
-      // For now, let's just let them in.
-      
-      router.push('/dashboard');
-    } catch (err: any) {
-      setError(err.message || 'Failed to sign in with Google');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +20,9 @@ export default function Login() {
     setError('');
 
     try {
+      // Store the intended role in session storage to be picked up by AuthContext or dashboard
+      sessionStorage.setItem('intendedRole', selectedRole);
+      
       await signInWithEmailAndPassword(auth, email, password);
       router.push('/dashboard');
     } catch (err: any) {
@@ -58,8 +36,9 @@ export default function Login() {
     setLoading(true);
     setError('');
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      // We can check if new user here if needed, or in AuthContext
+      sessionStorage.setItem('intendedRole', selectedRole);
+      
+      await signInWithPopup(auth, googleProvider);
       router.push('/dashboard');
     } catch (err: any) {
       console.error(err);
@@ -74,6 +53,22 @@ export default function Login() {
         <div className="card-body">
           <h2 className="card-title justify-center text-3xl font-bold mb-4">Welcome Back</h2>
           
+          <div className="flex flex-col gap-2 mb-2">
+            <span className="text-sm font-medium text-base-content/70">Sign in as:</span>
+            <div className="grid grid-cols-2 gap-2 p-1 bg-base-200 rounded-lg">
+              <button 
+                type="button"
+                className={`btn btn-sm border-0 ${selectedRole === 'MANAGER' ? 'btn-primary shadow-md' : 'btn-ghost text-base-content/70 hover:bg-base-300'}`}
+                onClick={() => setSelectedRole('MANAGER')}
+              >Manager</button>
+              <button 
+                type="button"
+                className={`btn btn-sm border-0 ${selectedRole === 'TEAM_MEMBER' ? 'btn-primary shadow-md' : 'btn-ghost text-base-content/70 hover:bg-base-300'}`}
+                onClick={() => setSelectedRole('TEAM_MEMBER')}
+              >Team Member</button>
+            </div>
+          </div>
+
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="form-control">
               <label className="label">

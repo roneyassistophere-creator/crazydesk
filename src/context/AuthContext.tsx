@@ -18,7 +18,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase/config';
-import { UserProfile, UserRole } from '@/types/auth'; // updated path
+import { UserProfile, UserRole, UserStatus } from '@/types/auth';
 
 interface AuthContextType {
   user: User | null;
@@ -26,6 +26,8 @@ interface AuthContextType {
   loading: boolean;
   logout: () => Promise<void>;
   createProfile: (uid: string, data: Omit<UserProfile, 'createdAt' | 'uid'>) => Promise<void>;
+  refreshProfile: () => Promise<void>;
+  switchRole: (role: UserRole) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -34,6 +36,8 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   logout: async () => {},
   createProfile: async () => {},
+  refreshProfile: async () => {},
+  switchRole: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -55,14 +59,89 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           
           if (docSnap.exists()) {
             const data = docSnap.data();
+            
+            // Backwards compatibility: ensure allowedRoles exists
+            const currentRole = data.role as UserRole;
+            let allowedRoles = (data.allowedRoles || [currentRole]) as UserRole[];
+            
+            // Check for intended role from login page
+            const intendedRole = typeof window !== 'undefined' ? sessionStorage.getItem('intendedRole') as UserRole : null;
+            let activeRole = currentRole;
+
+            if (intendedRole && allowedRoles.includes(intendedRole) && intendedRole !== currentRole) {
+               activeRole = intendedRole;
+               // Update Firestore immediately if switching role on login
+               await setDoc(docRef, { role: activeRole }, { merge: true });
+               if (typeof window !== 'undefined') sessionStorage.removeItem('intendedRole');
+            }
+
+            // Ensure admin is always approved and has admin role
+            if (currentUser.email === 'roney.assistophere@gmail.com') {
+               const adminRole = 'ADMIN';
+               const currentAllowedRoles = Array.isArray(data.allowedRoles) ? data.allowedRoles : [];
+               
+               if (data.role !== adminRole || data.status !== 'approved' || !currentAllowedRoles.includes(adminRole)) {
+                  const updatedAllowedRoles = Array.from(new Set([...currentAllowedRoles, adminRole]));
+                  
+                  await setDoc(docRef, { 
+                    ...data, 
+                    role: adminRole, 
+                    allowedRoles: updatedAllowedRoles,
+                    status: 'approved' 
+                  }, { merge: true });
+
+                  setProfile({
+                    uid: currentUser.uid,
+                    ...data,
+                    role: adminRole,
+                    allowedRoles: updatedAllowedRoles,
+                    status: 'approved',
+                    createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
+                  } as UserProfile);
+                  setLoading(false);
+                  return;
+               }
+            }
+
+            // Regular user profile setup
             setProfile({
               uid: currentUser.uid,
               ...data,
+              // Ensure allowedRoles is always an array
+              allowedRoles: Array.isArray(data.allowedRoles) ? data.allowedRoles : [data.role], 
               createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
             } as UserProfile);
           } else {
-            console.log("No profile found for user!");
-            // Handle profile missing case if needed
+            // New user registration (if not handled by signup page)
+            const isAdmin = currentUser.email === 'roney.assistophere@gmail.com';
+            
+            // Check for intended role from login/signup session
+            const intendedRole = typeof window !== 'undefined' ? sessionStorage.getItem('intendedRole') as UserRole : null;
+            const initialRole = (isAdmin ? 'ADMIN' : (intendedRole || 'TEAM_MEMBER')) as UserRole;
+            const allowedRoles = isAdmin ? ['ADMIN'] : []; // Non-admins start with NO allowed roles until approved
+            
+            const newProfile = {
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName,
+              role: initialRole,        // The role they requested
+              allowedRoles: allowedRoles, // Empty for normal users until approved
+              status: (isAdmin ? 'approved' : 'pending') as UserStatus,
+              createdAt: serverTimestamp(),
+            };
+            
+            // @ts-ignore
+            await setDoc(docRef, newProfile);
+            
+            setProfile({
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName,
+              role: initialRole,
+              allowedRoles: allowedRoles,
+              status: isAdmin ? 'approved' : 'pending',
+              createdAt: new Date(),
+            } as UserProfile);
           }
         } catch (error) {
           console.error("Error fetching user profile:", error);
@@ -83,20 +162,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setProfile(null);
   };
 
-  const createProfile = async (uid: string, data: Omit<UserProfile, 'createdAt' | 'uid'>) => {
+  const refreshProfile = async () => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'users', user.uid);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setProfile({
+          uid: user.uid,
+          ...data,
+          allowedRoles: data.allowedRoles || [data.role],
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
+        } as UserProfile);
+      }
+    } catch (error) {
+      console.error("Error refreshing user profile:", error);
+    }
+  };
+
+  const createProfile = async (uid: string, data: Omit<UserProfile, 'createdAt' | 'uid' | 'allowedRoles'>) => {
     try {
       const userRef = doc(db, 'users', uid);
+      const allowedRoles = [data.role];
+      
       const newProfile = {
         uid,
         ...data,
+        allowedRoles,
         createdAt: serverTimestamp(),
       };
+      
       // @ts-ignore
       await setDoc(userRef, newProfile);
+      
       // @ts-ignore
       setProfile({
           uid,
           ...data,
+          allowedRoles,
           // Use current date strictly for local state update to avoid waiting for server timestamp
           createdAt: new Date(),
       } as UserProfile);
@@ -106,9 +210,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const switchRole = async (newRole: UserRole) => {
+    if (!user || !profile) return;
+    
+    if (!profile.allowedRoles.includes(newRole)) {
+      console.error("User does not have permission to switch to this role");
+      return;
+    }
+
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(userRef, { role: newRole }, { merge: true });
+      
+      setProfile(prev => prev ? ({
+        ...prev,
+        role: newRole
+      }) : null);
+    } catch (error) {
+      console.error("Error switching role:", error);
+      throw error;
+    }
+  };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, logout, createProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, logout, createProfile, refreshProfile, switchRole }}>
       {children}
     </AuthContext.Provider>
   );
