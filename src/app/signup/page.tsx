@@ -122,9 +122,23 @@ export default function Signup() {
             <p className="text-base-content/70 mb-4">
               Your signup request has been sent to the admin for approval. You'll be able to access the system once approved.
             </p>
-            <Link href="/" className="btn btn-primary">
-              Back to Home
-            </Link>
+            <div className="flex flex-col gap-2">
+              <Link href="/" className="btn btn-primary w-full">
+                Back to Home
+              </Link>
+              <button 
+                onClick={() => {
+                  setSignupComplete(false);
+                  setDisplayName('');
+                  setEmail('');
+                  setPassword('');
+                  setRole('TEAM_MEMBER');
+                }}
+                className="btn btn-outline w-full"
+              >
+                Sign Up for Another Role
+              </button>
+            </div>
           </div>
         </div>
       </div>
