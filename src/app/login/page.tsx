@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
-import { auth, googleProvider } from '@/lib/firebase/config';
+import { auth, googleProvider, db } from '@/lib/firebase/config';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { UserRole } from '@/types/auth';
@@ -36,9 +37,54 @@ export default function Login() {
     setLoading(true);
     setError('');
     try {
-      sessionStorage.setItem('intendedRole', selectedRole);
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
       
-      await signInWithPopup(auth, googleProvider);
+      const userRef = doc(db, "users", user.uid);
+      const userSnap = await getDoc(userRef);
+
+      const userData: any = {
+        displayName: user.displayName,
+        email: user.email,
+        // Don't set role here if it exists.
+      };
+
+      if (!userSnap.exists()) {
+        // Brand new user: create doc and set role
+        userData.uid = user.uid;
+        userData.role = selectedRole;
+        userData.requestedRoles = [selectedRole];
+        userData.status = 'pending';
+        userData.allowedRoles = [];
+        userData.createdAt = serverTimestamp();
+        
+        await setDoc(userRef, userData);
+      } else {
+        // User exists
+        const currentData = userSnap.data();
+        const currentAllowed = currentData.allowedRoles || [];
+        const currentRequested = currentData.requestedRoles || [];
+
+        // If user already HAS the role approved, just switch to it (update active role)
+        if (currentAllowed.includes(selectedRole)) {
+           await setDoc(userRef, { role: selectedRole }, { merge: true });
+        } else {
+           // User does NOT have this role. It's a Request.
+           // Add to requestedRoles if not there
+           const newRequested = Array.from(new Set([...currentRequested, selectedRole]));
+           
+           userData.requestedRoles = newRequested;
+           
+           // If they were rejected, or had no status, update status to pending so Admin sees it
+           // DO NOT overwrite to pending if they are already 'approved' (meaning active in another role)
+           if (currentData.status === 'rejected' || !currentData.status) {
+             userData.status = 'pending';
+           }
+           
+           await setDoc(userRef, userData, { merge: true });
+        }
+      }
+
       router.push('/dashboard');
     } catch (err: any) {
       console.error(err);

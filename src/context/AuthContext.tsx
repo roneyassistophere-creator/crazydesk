@@ -112,36 +112,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
             } as UserProfile);
           } else {
-            // New user registration (if not handled by signup page)
-            const isAdmin = currentUser.email === 'roney.assistophere@gmail.com';
-            
-            // Check for intended role from login/signup session
-            const intendedRole = typeof window !== 'undefined' ? sessionStorage.getItem('intendedRole') as UserRole : null;
-            const initialRole = (isAdmin ? 'ADMIN' : (intendedRole || 'TEAM_MEMBER')) as UserRole;
-            const allowedRoles = isAdmin ? ['ADMIN'] : []; // Non-admins start with NO allowed roles until approved
-            
-            const newProfile = {
-              uid: currentUser.uid,
-              email: currentUser.email,
-              displayName: currentUser.displayName,
-              role: initialRole,        // The role they requested
-              allowedRoles: allowedRoles, // Empty for normal users until approved
-              status: (isAdmin ? 'approved' : 'pending') as UserStatus,
-              createdAt: serverTimestamp(),
-            };
-            
-            // @ts-ignore
-            await setDoc(docRef, newProfile);
-            
-            setProfile({
-              uid: currentUser.uid,
-              email: currentUser.email,
-              displayName: currentUser.displayName,
-              role: initialRole,
-              allowedRoles: allowedRoles,
-              status: isAdmin ? 'approved' : 'pending',
-              createdAt: new Date(),
-            } as UserProfile);
+             // If user exists in Auth but not in Firestore, we should NOT recreate them automatically.
+             // This handles the "deleted user" scenario.
+             // However, we must ensure the Super Admin always has a profile.
+             if (currentUser.email === 'roney.assistophere@gmail.com') {
+                const adminRole = 'ADMIN';
+                const newProfile = {
+                  uid: currentUser.uid,
+                  email: currentUser.email,
+                  displayName: currentUser.displayName,
+                  role: adminRole,
+                  allowedRoles: [adminRole],
+                  status: 'approved' as UserStatus,
+                  createdAt: serverTimestamp(),
+                };
+                
+                await setDoc(docRef, newProfile);
+                
+                setProfile({
+                  uid: currentUser.uid,
+                  email: currentUser.email,
+                  displayName: currentUser.displayName,
+                  role: adminRole,
+                  allowedRoles: [adminRole],
+                  status: 'approved',
+                  createdAt: new Date(),
+                } as UserProfile);
+             } else {
+                // For normal users, if doc doesn't exist, profile is null.
+                setProfile(null);
+             }
           }
         } catch (error) {
           console.error("Error fetching user profile:", error);

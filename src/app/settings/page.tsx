@@ -2,10 +2,20 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase/config';
-import { collection, query, where, getDocs, getDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { UserProfile, UserRole, UserStatus } from '@/types/auth';
-import { CheckCircle, XCircle, Clock, Users, Trash2 } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Users, Trash2, AlertTriangle, UserPlus, UserMinus } from 'lucide-react';
+import ConfirmationModal from '@/components/ui/ConfirmationModal';
 import { useRouter } from 'next/navigation';
+
+interface ModalConfig {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  type: 'danger' | 'success' | 'warning';
+  confirmText: string;
+  onConfirm: () => Promise<void>;
+}
 
 export default function Settings() {
   const { profile } = useAuth();
@@ -15,6 +25,15 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<'ALL' | 'MANAGER' | 'TEAM_MEMBER'>('ALL');
+  
+  const [modalConfig, setModalConfig] = useState<ModalConfig>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'warning',
+    confirmText: 'Confirm',
+    onConfirm: async () => {},
+  });
 
   // Redirect non-admin/manager users
   useEffect(() => {
@@ -23,13 +42,14 @@ export default function Settings() {
     }
   }, [profile, router]);
 
-  const fetchUsers = async () => {
+  useEffect(() => {
+    if (!profile || (profile.role !== 'ADMIN' && profile.role !== 'MANAGER')) return;
+
     setLoading(true);
-    try {
-      // Fetch all users (simplest approach to handle mixed states correctly)
-      const usersQuery = query(collection(db, 'users'));
-      const snapshot = await getDocs(usersQuery);
-      
+    // Realtime listener for users collection
+    const usersQuery = query(collection(db, 'users'));
+    
+    const unsubscribe = onSnapshot(usersQuery, (snapshot) => {
       const allUsers = snapshot.docs.map(doc => {
         const data = doc.data();
         return {
@@ -38,16 +58,14 @@ export default function Settings() {
         } as UserProfile;
       });
 
-      // Filter for Pending Requests section: anyone with items in requestedRoles
-      // AND status isn't rejected (unless they re-requested, which sets status to pending)
+      // Filter for Pending Requests section
       const pendingList = allUsers.filter(u => 
         u.requestedRoles && 
         u.requestedRoles.length > 0 &&
-        u.status !== 'rejected' // Optional: if rejected users can't have pending requests
+        u.status !== 'rejected'
       );
       
-      // Filter for Approved Users section: anyone with status 'approved'
-      // Exclude admin from the list
+      // Filter for Approved Users section
       const approvedList = allUsers.filter(u => 
         u.status === 'approved' && 
         u.role !== 'ADMIN'
@@ -55,166 +73,151 @@ export default function Settings() {
 
       setPendingUsers(pendingList);
       setApprovedUsers(approvedList);
-    } catch (error) {
-      console.error('Error fetching users:', error);
-    } finally {
       setLoading(false);
-    }
-  };
+    }, (error) => {
+      console.error('Error fetching users:', error);
+      setLoading(false);
+    });
 
-  useEffect(() => {
-    if (profile?.role === 'ADMIN' || profile?.role === 'MANAGER') {
-      fetchUsers();
-    }
+    return () => unsubscribe();
   }, [profile]);
 
-  const handleApproveRoleRequest = async (user: UserProfile, roleToApprove: UserRole) => {
-    setActionLoading(`${user.uid}-${roleToApprove}`);
+  const closeModal = () => {
+    setModalConfig(prev => ({ ...prev, isOpen: false }));
+  };
+
+  const executeAction = async (action: () => Promise<void>) => {
+    // Determine user ID from context or pass it? For simplistic handling, we set a global loading state if needed
+    // or rely on optimistic updates. Since onSnapshot handles UI, we just await the action.
     try {
-      const currentAllowed = user.allowedRoles || [];
-      const newAllowed = Array.from(new Set([...currentAllowed, roleToApprove]));
-      
-      const currentRequested = user.requestedRoles || [];
-      const newRequested = currentRequested.filter(r => r !== roleToApprove);
-      
-      const updates: any = {
-        allowedRoles: newAllowed,
-        requestedRoles: newRequested,
-        status: 'approved',
-      };
-
-      // Set role if it is currently not set to anything valid
-      if (!user.role || !newAllowed.includes(user.role)) {
-          updates.role = roleToApprove;
-      }
-
-      await updateDoc(doc(db, 'users', user.uid), updates);
-      await fetchUsers();
+      await action();
+      closeModal();
     } catch (error) {
-      console.error('Error approving role request:', error);
-    } finally {
-      setActionLoading(null);
+      console.error('Action failed:', error);
+      // Maybe show toast error here?
     }
   };
 
-  const handleRejectRoleRequest = async (userId: string, roleToReject: UserRole) => {
-    setActionLoading(`${userId}-${roleToReject}`);
-    try {
-      const userRef = doc(db, 'users', userId);
-      const userDoc = await getDoc(userRef);
-      if (!userDoc.exists()) return;
-      
-      const userData = userDoc.data() as UserProfile;
-      const currentRequested = userData.requestedRoles || [];
-      const newRequested = currentRequested.filter(r => r !== roleToReject);
-      
-      const updates: any = {
-        requestedRoles: newRequested
-      };
-
-      const currentAllowedLength = (userData.allowedRoles || []).length;
-      if (newRequested.length === 0 && currentAllowedLength === 0) {
-          updates.status = 'rejected';
+  const confirmApproveRoleRequest = (user: UserProfile, roleToApprove: UserRole) => {
+    setModalConfig({
+      isOpen: true,
+      title: 'Approve Request',
+      message: `Are you sure you want to approve ${user.displayName}'s request for ${roleToApprove === 'TEAM_MEMBER' ? 'Team Member' : 'Manager'} access?`,
+      type: 'success',
+      confirmText: 'Approve Access',
+      onConfirm: async () => {
+        const currentAllowed = user.allowedRoles || [];
+        const newAllowed = Array.from(new Set([...currentAllowed, roleToApprove]));
+        
+        const currentRequested = user.requestedRoles || [];
+        const newRequested = currentRequested.filter(r => r !== roleToApprove);
+        
+        const updates: any = {
+          allowedRoles: newAllowed,
+          requestedRoles: newRequested,
+          status: 'approved',
+        };
+  
+        // Set role if it is currently not set to anything valid
+        if (!user.role || !newAllowed.includes(user.role)) {
+            updates.role = roleToApprove;
+        }
+  
+        await updateDoc(doc(db, 'users', user.uid), updates);
       }
-
-      await updateDoc(userRef, updates);
-      await fetchUsers();
-    } catch (error) {
-       console.error('Error rejecting role request:', error);
-    } finally {
-       setActionLoading(null);
-    }
+    });
   };
 
-  const handleToggleRole = async (user: UserProfile, roleToToggle: UserRole) => {
-    // Prevent removing the last role or current active role
-    if (user.allowedRoles.includes(roleToToggle) && user.allowedRoles.length <= 1) return;
-    if (roleToToggle === user.role) return;
-
-    setActionLoading(user.uid);
-    try {
-      let newAllowedRoles = [...(user.allowedRoles || [])];
-      
-      if (newAllowedRoles.includes(roleToToggle)) {
-        newAllowedRoles = newAllowedRoles.filter(r => r !== roleToToggle);
-      } else {
-        newAllowedRoles.push(roleToToggle);
+  const confirmRejectRoleRequest = (userId: string, roleToReject: UserRole, displayName: string | null) => {
+    setModalConfig({
+      isOpen: true,
+      title: 'Reject Request',
+      message: `Are you sure you want to reject the ${roleToReject === 'TEAM_MEMBER' ? 'Team Member' : 'Manager'} request from ${displayName || 'this user'}?`,
+      type: 'danger',
+      confirmText: 'Reject Request',
+      onConfirm: async () => {
+        const userRef = doc(db, 'users', userId);
+        const userDoc = await getDoc(userRef);
+        if (!userDoc.exists()) return;
+        
+        const userData = userDoc.data() as UserProfile;
+        const currentRequested = userData.requestedRoles || [];
+        const newRequested = currentRequested.filter(r => r !== roleToReject);
+        
+        const updates: any = {
+          requestedRoles: newRequested
+        };
+  
+        const currentAllowedLength = (userData.allowedRoles || []).length;
+        if (newRequested.length === 0 && currentAllowedLength === 0) {
+            updates.status = 'rejected';
+        }
+  
+        await updateDoc(userRef, updates);
       }
-      
-      await updateDoc(doc(db, 'users', user.uid), {
-        allowedRoles: newAllowedRoles
-      });
-      await fetchUsers();
-    } catch (error) {
-      console.error('Error toggling role:', error);
-    } finally {
-      setActionLoading(null);
-    }
+    });
   };
 
-  const handleDeleteUser = async (userId: string) => {
-    if (!window.confirm('Are you sure you want to permanently delete this user? This action cannot be undone.')) return;
-    
-    setActionLoading(userId);
-    try {
-      await deleteDoc(doc(db, 'users', userId));
-      // Refresh list
-      setPendingUsers(prev => prev.filter(u => u.uid !== userId));
-      setApprovedUsers(prev => prev.filter(u => u.uid !== userId));
-    } catch (error) {
-      console.error('Error deleting user:', error);
-    } finally {
-      setActionLoading(null);
-    }
+  const confirmRevokeRole = (user: UserProfile, roleToRevoke: UserRole) => {
+    setModalConfig({
+      isOpen: true,
+      title: 'Revoke Access',
+      message: `Are you sure you want to revoke ${roleToRevoke === 'TEAM_MEMBER' ? 'Team Member' : 'Manager'} access from ${user.displayName}? This will remove their ability to access ${roleToRevoke === 'TEAM_MEMBER' ? 'team' : 'management'} features.`,
+      type: 'danger',
+      confirmText: 'Revoke Access',
+      onConfirm: async () => {
+        const currentAllowed = user.allowedRoles || [];
+        const newAllowed = currentAllowed.filter(r => r !== roleToRevoke);
+        
+        const updates: any = { allowedRoles: newAllowed };
+        
+        if (newAllowed.length === 0) {
+           updates.status = 'rejected'; 
+        }
+        
+        if (user.role === roleToRevoke) {
+            if (newAllowed.length > 0) {
+                updates.role = newAllowed[0];
+            }
+        }
+  
+        await updateDoc(doc(db, 'users', user.uid), updates);
+      }
+    });
   };
 
-  const handleApproveRole = async (user: UserProfile, roleToApprove: UserRole) => {
-    setActionLoading(user.uid);
-    try {
-      const currentAllowed = user.allowedRoles || [];
-      if (!currentAllowed.includes(roleToApprove)) {
-        const newAllowed = [...currentAllowed, roleToApprove];
-        await updateDoc(doc(db, 'users', user.uid), {
-           allowedRoles: newAllowed,
-           status: 'approved',
-           role: user.role === roleToApprove ? user.role : (user.role || roleToApprove)
-        });
-        await fetchUsers();
+  const confirmDeleteUser = (user: UserProfile) => {
+    setModalConfig({
+      isOpen: true,
+      title: 'Delete User',
+      message: `Are you sure you want to permanently delete ${user.displayName}? This action cannot be undone and will remove all their data.`,
+      type: 'danger',
+      confirmText: 'Delete Permanently',
+      onConfirm: async () => {
+        await deleteDoc(doc(db, 'users', user.uid));
       }
-    } catch (error) {
-      console.error('Error approving role:', error);
-    } finally {
-      setActionLoading(null);
-    }
+    });
   };
 
-  const handleRevokeRole = async (user: UserProfile, roleToRevoke: UserRole) => {
-    if (!window.confirm(`Are you sure you want to revoke ${roleToRevoke} access for ${user.displayName}?`)) return;
-
-    setActionLoading(user.uid);
-    try {
-      const currentAllowed = user.allowedRoles || [];
-      const newAllowed = currentAllowed.filter(r => r !== roleToRevoke);
-      
-      const updates: any = { allowedRoles: newAllowed };
-      
-      if (newAllowed.length === 0) {
-         updates.status = 'rejected'; 
+  const confirmGrantRole = (user: UserProfile, roleToGrant: UserRole) => {
+    setModalConfig({
+      isOpen: true,
+      title: 'Grant Access',
+      message: `Do you want to grant ${roleToGrant === 'TEAM_MEMBER' ? 'Team Member' : 'Manager'} access to ${user.displayName}?`,
+      type: 'success',
+      confirmText: 'Grant Access',
+      onConfirm: async () => {
+        const currentAllowed = user.allowedRoles || [];
+        if (!currentAllowed.includes(roleToGrant)) {
+          const newAllowed = [...currentAllowed, roleToGrant];
+          await updateDoc(doc(db, 'users', user.uid), {
+             allowedRoles: newAllowed,
+             status: 'approved',
+             role: user.role === roleToGrant ? user.role : (user.role || roleToGrant)
+          });
+        }
       }
-      
-      if (user.role === roleToRevoke) {
-          if (newAllowed.length > 0) {
-              updates.role = newAllowed[0];
-          }
-      }
-
-      await updateDoc(doc(db, 'users', user.uid), updates);
-      await fetchUsers();
-    } catch (error) {
-       console.error('Error revoking role:', error);
-    } finally {
-       setActionLoading(null);
-    }
+    });
   };
 
   const hasRole = (user: UserProfile, role: UserRole) => user.allowedRoles?.includes(role);
@@ -279,7 +282,6 @@ export default function Settings() {
                       <tr key={`${user.uid}-${requestedRole}`}>
                         <td className="font-medium">
                           {user.displayName || 'N/A'}
-                          {/* Only show email for the first row of this user to reduce clutter, or keep it */}
                         </td>
                         <td>{user.email}</td>
                         <td>
@@ -293,27 +295,17 @@ export default function Settings() {
                         <td>
                           <div className="flex gap-2">
                             <button
-                              onClick={() => handleApproveRoleRequest(user, requestedRole)}
-                              disabled={actionLoading === `${user.uid}-${requestedRole}`}
+                              onClick={() => confirmApproveRoleRequest(user, requestedRole)}
                               className="btn btn-success btn-sm"
                             >
-                              {actionLoading === `${user.uid}-${requestedRole}` ? (
-                                <span className="loading loading-spinner loading-xs"></span>
-                              ) : (
-                                <CheckCircle size={16} />
-                              )}
+                              <CheckCircle size={16} />
                               Approve
                             </button>
                             <button
-                              onClick={() => handleRejectRoleRequest(user.uid, requestedRole)}
-                              disabled={actionLoading === `${user.uid}-${requestedRole}`}
+                              onClick={() => confirmRejectRoleRequest(user.uid, requestedRole, user.displayName)}
                               className="btn btn-error btn-sm"
                             >
-                              {actionLoading === `${user.uid}-${requestedRole}` ? (
-                                <span className="loading loading-spinner loading-xs"></span>
-                              ) : (
-                                <XCircle size={16} />
-                              )}
+                              <XCircle size={16} />
                               Reject
                             </button>
                           </div>
@@ -389,18 +381,16 @@ export default function Settings() {
                               Active
                             </span>
                             <button 
-                              onClick={() => handleRevokeRole(user, 'MANAGER')}
+                              onClick={() => confirmRevokeRole(user, 'MANAGER')}
                               className="btn btn-xs btn-ghost text-error hover:bg-error/10"
-                              disabled={!!actionLoading}
                             >
                               Revoke
                             </button>
                           </div>
                         ) : (
                           <button 
-                            onClick={() => handleApproveRole(user, 'MANAGER')}
+                            onClick={() => confirmGrantRole(user, 'MANAGER')}
                             className="btn btn-xs btn-outline btn-success"
-                            disabled={!!actionLoading}
                           >
                             Grant Access
                           </button>
@@ -415,18 +405,16 @@ export default function Settings() {
                               Active
                             </span>
                             <button 
-                              onClick={() => handleRevokeRole(user, 'TEAM_MEMBER')}
+                              onClick={() => confirmRevokeRole(user, 'TEAM_MEMBER')}
                               className="btn btn-xs btn-ghost text-error hover:bg-error/10"
-                              disabled={!!actionLoading}
                             >
                               Revoke
                             </button>
                           </div>
                         ) : (
                           <button 
-                            onClick={() => handleApproveRole(user, 'TEAM_MEMBER')}
+                            onClick={() => confirmGrantRole(user, 'TEAM_MEMBER')}
                             className="btn btn-xs btn-outline btn-accent"
-                            disabled={!!actionLoading}
                           >
                             Grant Access
                           </button>
@@ -437,10 +425,9 @@ export default function Settings() {
                       <td>
                         {profile?.role === 'ADMIN' && (
                           <button 
-                            onClick={() => handleDeleteUser(user.uid)}
+                            onClick={() => confirmDeleteUser(user)}
                             className="btn btn-ghost btn-xs text-error tooltip"
                             data-tip="Delete User"
-                            disabled={!!actionLoading}
                           >
                             <Trash2 size={16} />
                           </button>
@@ -453,6 +440,16 @@ export default function Settings() {
             </div>
         </div>
       </div>
+
+      <ConfirmationModal
+        isOpen={modalConfig.isOpen}
+        title={modalConfig.title}
+        message={modalConfig.message}
+        type={modalConfig.type}
+        confirmText={modalConfig.confirmText}
+        onClose={closeModal}
+        onConfirm={() => executeAction(modalConfig.onConfirm)}
+      />
     </div>
   );
 }

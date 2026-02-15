@@ -18,10 +18,15 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const showSidebar = !isPublic; 
 
   useEffect(() => {
-    if (!loading && !user && !isPublic) {
-      router.push('/login');
+    if (!loading && !isPublic) {
+      if (!user) {
+        router.push('/login');
+      } else if (!profile) {
+        // User logged in but profile deleted/missing -> force logout
+        logout().then(() => router.push('/signup'));
+      }
     }
-  }, [user, loading, isPublic, router]);
+  }, [user, profile, loading, isPublic, router, logout]);
 
   const handleLogout = async () => {
     await logout();
