@@ -101,7 +101,11 @@ export default function Signup() {
 
       setSignupComplete(true);
     } catch (err: any) {
-      setError(err.message || 'Failed to sign up');
+      if (err.code === 'auth/email-already-in-use') {
+        setError('An account with this email already exists. Please sign in instead.');
+      } else {
+        setError(err.message || 'Failed to sign up');
+      }
     } finally {
       setLoading(false);
     }
@@ -195,7 +199,16 @@ export default function Signup() {
               </select>
             </div>
 
-            {error && <p className="text-error text-sm text-center">{error}</p>}
+            {error && (
+              <div className="flex flex-col gap-2">
+                <p className="text-error text-sm text-center">{error}</p>
+                {error.includes('already exists') && (
+                  <Link href="/login" className="btn btn-sm btn-primary btn-outline w-full">
+                    Sign In
+                  </Link>
+                )}
+              </div>
+            )}
 
             <div className="form-control mt-6 space-y-2">
               <button 
