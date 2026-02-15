@@ -128,7 +128,11 @@ export default function Signup() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-base-200">
+    <div className="flex min-h-screen items-center justify-center bg-base-200 relative">
+      <Link href="/" className="btn btn-ghost btn-sm absolute top-4 left-4 gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        Back to Home
+      </Link>
       <div className="card w-96 bg-base-100 shadow-xl">
         <div className="card-body">
           <h2 className="card-title justify-center text-3xl font-bold mb-4">Create Account</h2>
