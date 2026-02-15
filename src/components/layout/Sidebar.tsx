@@ -11,13 +11,18 @@ import {
   FolderOpen,
   Calendar,
   Wrench,
-  LogOut
+  LogOut,
+  UserCircle // Import UserCircle for My Account
 } from 'lucide-react';
 import ThemeController from './ThemeController';
+import { useAuth } from '@/context/AuthContext'; // Import useAuth
+import { useRouter } from 'next/navigation'; // Import useRouter
 
 const menuItems = [
   { name: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
+  { name: 'My Account', icon: UserCircle, href: '/my-account' }, // Add My Account
   { name: 'Task Manager', icon: CheckSquare, href: '/tasks' },
+
   { name: 'Team Availability', icon: Users, href: '/team-availability' },
   { name: 'Reporting', icon: BarChart, href: '/reporting' },
   { name: 'Communication', icon: MessageSquare, href: '/communication' },
@@ -28,6 +33,17 @@ const menuItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { logout } = useAuth();
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.push('/');
+    } catch (error) {
+      console.error('Logout failed', error);
+    }
+  };
 
   return (
     <div className="flex flex-col h-screen w-64 bg-base-200 text-base-content shadow-xl">
@@ -66,7 +82,10 @@ export default function Sidebar() {
           <ThemeController />
         </div>
         
-        <button className="flex items-center gap-3 w-full px-4 py-3 text-base-content/70 hover:text-error hover:bg-base-300 rounded-lg transition-all duration-200 group">
+        <button 
+          onClick={handleLogout}
+          className="flex items-center gap-3 w-full px-4 py-3 text-base-content/70 hover:text-error hover:bg-base-300 rounded-lg transition-all duration-200 group"
+        >
           <LogOut size={20} className="group-hover:text-error transition-colors" />
           <span className="font-medium">Sign Out</span>
         </button>

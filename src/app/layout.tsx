@@ -18,6 +18,9 @@ export const metadata: Metadata = {
   description: "Team management system for Assistophere",
 };
 
+import ClientLayout from "@/components/layout/ClientLayout";
+import { AuthProvider } from "@/context/AuthContext";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -25,14 +28,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" data-theme="light">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased flex h-screen bg-base-100 text-base-content`}
-      >
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto p-8 relative bg-base-100">
-           {/* Top bar placeholder for mobile menu or user profile later */}
-          {children}
-        </main>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <AuthProvider>
+          <ClientLayout>
+            {children}
+          </ClientLayout>
+        </AuthProvider>
       </body>
     </html>
   );
