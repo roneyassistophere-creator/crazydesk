@@ -23,7 +23,6 @@ import { UserRole } from '@/types/auth';
 
 const menuItems = [
   { name: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
-  { name: 'My Account', icon: UserCircle, href: '/my-account' },
   { name: 'Task Manager', icon: CheckSquare, href: '/tasks' },
   { name: 'Team Availability', icon: Users, href: '/team-availability' },
   { name: 'Reporting', icon: BarChart, href: '/reporting' },
@@ -74,17 +73,20 @@ export default function Sidebar() {
   return (
     <div className="flex flex-col h-screen w-64 bg-base-200 text-base-content shadow-xl">
       <div className="p-6 border-b border-base-300">
-        <h1 className="text-2xl font-bold text-primary">
-          Crazy Desk
-        </h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-2xl font-bold text-primary truncate">
+            Crazy Desk
+          </h1>
+          <ThemeController />
+        </div>
         <div className="flex flex-col gap-2 mt-4 px-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase text-base-content/50">Role</span>
             {profile && (
               <div className={`badge badge-sm whitespace-nowrap overflow-hidden text-ellipsis max-w-30 ${
-                profile.role === 'ADMIN' ? 'badge-error' : 
-                profile.role === 'MANAGER' ? 'badge-secondary' : 
-                'badge-accent'
+                profile.role === 'ADMIN' ? 'badge-error text-white' : 
+                profile.role === 'MANAGER' ? 'badge-primary text-primary-content' : 
+                'badge-accent text-accent-content'
               }`}>
                 {profile.role === 'TEAM_MEMBER' ? 'Team Member' : profile.role}
               </div>
@@ -165,18 +167,41 @@ export default function Sidebar() {
         </ul>
       </nav>
 
-      <div className="p-4 border-t border-base-300 space-y-4">
-        <div className="flex justify-center">
-          <ThemeController />
+      <div className="p-4 border-t border-base-300">
+        <div className="dropdown dropdown-top w-full">
+          <div tabIndex={0} role="button" className="flex items-center gap-3 w-full px-4 py-3 hover:bg-base-300 rounded-lg transition-all duration-200 group">
+            <div className="avatar placeholder">
+              <div className="bg-neutral text-neutral-content rounded-full w-10">
+                <span className="text-sm font-bold">
+                  {profile?.displayName?.charAt(0) || profile?.email?.charAt(0).toUpperCase()}
+                </span>
+              </div>
+            </div>
+            <div className="flex-1 text-left overflow-hidden">
+              <div className="font-bold truncate text-sm">{profile?.displayName || 'User'}</div>
+              <div className="text-[10px] text-base-content/50 uppercase font-bold tracking-wider">My Account</div>
+            </div>
+            <ChevronDown size={14} className="text-base-content/50" />
+          </div>
+          <ul tabIndex={0} className="dropdown-content z-1 menu p-2 shadow bg-base-100 rounded-box w-56 mb-2 border border-base-300">
+            <li>
+              <Link href="/my-account" className="flex items-center gap-2">
+                <UserCircle size={18} />
+                <span>Profile Settings</span>
+              </Link>
+            </li>
+            <div className="divider my-1"></div>
+            <li>
+              <button 
+                onClick={handleLogout}
+                className="flex items-center gap-2 text-error hover:text-error hover:bg-error/10"
+              >
+                <LogOut size={18} />
+                <span>Sign Out</span>
+              </button>
+            </li>
+          </ul>
         </div>
-        
-        <button 
-          onClick={handleLogout}
-          className="flex items-center gap-3 w-full px-4 py-3 text-base-content/70 hover:text-error hover:bg-base-300 rounded-lg transition-all duration-200 group"
-        >
-          <LogOut size={20} className="group-hover:text-error transition-colors" />
-          <span className="font-medium">Sign Out</span>
-        </button>
       </div>
     </div>
   );
