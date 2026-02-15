@@ -13,6 +13,7 @@ import {
   Wrench,
   LogOut
 } from 'lucide-react';
+import ThemeController from './ThemeController';
 
 const menuItems = [
   { name: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
@@ -29,12 +30,12 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <div className="flex flex-col h-screen w-64 bg-gray-900 text-white shadow-xl">
-      <div className="p-6 border-b border-gray-800">
-        <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+    <div className="flex flex-col h-screen w-64 bg-base-200 text-base-content shadow-xl">
+      <div className="p-6 border-b border-base-300">
+        <h1 className="text-2xl font-bold text-primary">
           Crazy Desk
         </h1>
-        <p className="text-xs text-gray-400 mt-1 uppercase tracking-wider">Assistophere Team</p>
+        <p className="text-xs text-base-content/70 mt-1 uppercase tracking-wider">Assistophere Team</p>
       </div>
 
       <nav className="flex-1 overflow-y-auto py-6">
@@ -47,11 +48,11 @@ export default function Sidebar() {
                   href={item.href}
                   className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${
                     isActive 
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' 
-                      : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                      ? 'bg-primary text-primary-content shadow-lg' 
+                      : 'text-base-content/70 hover:text-base-content hover:bg-base-300'
                   }`}
                 >
-                  <item.icon size={20} className={isActive ? 'text-white' : 'text-gray-400 group-hover:text-white transition-colors'} />
+                  <item.icon size={20} className={isActive ? 'text-primary-content' : 'text-base-content/70 group-hover:text-base-content transition-colors'} />
                   <span className="font-medium">{item.name}</span>
                 </Link>
               </li>
@@ -60,9 +61,13 @@ export default function Sidebar() {
         </ul>
       </nav>
 
-      <div className="p-4 border-t border-gray-800">
-        <button className="flex items-center gap-3 w-full px-4 py-3 text-gray-400 hover:text-red-400 hover:bg-gray-800/50 rounded-lg transition-all duration-200 group">
-          <LogOut size={20} className="group-hover:text-red-400 transition-colors" />
+      <div className="p-4 border-t border-base-300 space-y-4">
+        <div className="flex justify-center">
+          <ThemeController />
+        </div>
+        
+        <button className="flex items-center gap-3 w-full px-4 py-3 text-base-content/70 hover:text-error hover:bg-base-300 rounded-lg transition-all duration-200 group">
+          <LogOut size={20} className="group-hover:text-error transition-colors" />
           <span className="font-medium">Sign Out</span>
         </button>
       </div>
