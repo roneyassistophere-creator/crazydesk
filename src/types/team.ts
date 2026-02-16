@@ -14,6 +14,7 @@ export interface MemberProfile {
   email: string;
   role: string;
   photoURL?: string;
+  whatsapp?: string;
   
   // Team Availability specific fields
   jobTitle?: string;

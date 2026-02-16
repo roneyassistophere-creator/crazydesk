@@ -39,15 +39,19 @@ export function useTeamData() {
                });
            }
 
+           const finalPhotoURL = u.photoURL || profile.photoURL;
+           
            return {
                id: u.uid,
                uid: u.uid,
+               isOnline: isActive,
+               ...profile,
+               // Ensure core user data from users collection takes priority over member_profiles
                displayName: u.displayName || u.email || 'Unknown User',
                email: u.email || '',
                role: u.role,
-               photoURL: undefined, // UserProfile doesn't have photoURL yet
-               isOnline: isActive,
-               ...profile
+               photoURL: finalPhotoURL,
+               whatsapp: u.whatsapp,
            } as MemberProfile;
        });
 

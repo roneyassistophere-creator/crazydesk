@@ -20,6 +20,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, RefreshCw } from 'lucide-react';
 import { UserRole } from '@/types/auth';
+import UserAvatar from '@/components/common/UserAvatar';
 
 const menuItems = [
   { name: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
@@ -170,13 +171,13 @@ export default function Sidebar() {
       <div className="p-4 border-t border-base-300">
         <div className="dropdown dropdown-top w-full">
           <div tabIndex={0} role="button" className="flex items-center gap-3 w-full px-4 py-3 hover:bg-base-300 rounded-lg transition-all duration-200 group">
-            <div className="avatar placeholder">
-              <div className="bg-neutral text-neutral-content rounded-full w-10">
-                <span className="text-sm font-bold">
-                  {profile?.displayName?.charAt(0) || profile?.email?.charAt(0).toUpperCase()}
-                </span>
-              </div>
-            </div>
+            <UserAvatar 
+              photoURL={profile?.photoURL} 
+              displayName={profile?.displayName} 
+              size="sm" 
+              showRing={false}
+              className="shrink-0" 
+            />
             <div className="flex-1 text-left overflow-hidden">
               <div className="font-bold truncate text-sm">{profile?.displayName || 'User'}</div>
               <div className="text-[10px] text-base-content/50 uppercase font-bold tracking-wider">My Account</div>

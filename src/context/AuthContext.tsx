@@ -87,7 +87,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     ...data, 
                     role: adminRole, 
                     allowedRoles: updatedAllowedRoles,
-                    status: 'approved' 
+                    status: 'approved',
+                    photoURL: currentUser.photoURL || data.photoURL, // Sync photo
                   }, { merge: true });
 
                   setProfile({
@@ -96,6 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     role: adminRole,
                     allowedRoles: updatedAllowedRoles,
                     status: 'approved',
+                    photoURL: currentUser.photoURL || data.photoURL,
                     createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
                   } as UserProfile);
                   setLoading(false);
@@ -104,13 +106,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
 
             // Regular user profile setup
-            setProfile({
+            const profileData = {
               uid: currentUser.uid,
               ...data,
               // Ensure allowedRoles is always an array
-              allowedRoles: Array.isArray(data.allowedRoles) ? data.allowedRoles : [data.role], 
+              allowedRoles: Array.isArray(data.allowedRoles) ? data.allowedRoles : [data.role],
               createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
-            } as UserProfile);
+            } as UserProfile;
+
+            // Sync Photo URL from Firebase Auth (Google) to Firestore if different
+            if (currentUser.photoURL && profileData.photoURL !== currentUser.photoURL) {
+              profileData.photoURL = currentUser.photoURL;
+              await setDoc(docRef, { photoURL: currentUser.photoURL }, { merge: true });
+            }
+
+            setProfile(profileData);
           } else {
              // If user exists in Auth but not in Firestore, we should NOT recreate them automatically.
              // This handles the "deleted user" scenario.
@@ -121,6 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   uid: currentUser.uid,
                   email: currentUser.email,
                   displayName: currentUser.displayName,
+                  photoURL: currentUser.photoURL, // Include photo from Google
                   role: adminRole,
                   allowedRoles: [adminRole],
                   status: 'approved' as UserStatus,
@@ -133,6 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   uid: currentUser.uid,
                   email: currentUser.email,
                   displayName: currentUser.displayName,
+                  photoURL: currentUser.photoURL,
                   role: adminRole,
                   allowedRoles: [adminRole],
                   status: 'approved',

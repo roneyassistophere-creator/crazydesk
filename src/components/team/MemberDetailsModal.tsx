@@ -24,12 +24,12 @@ export default function MemberDetailsModal({ member, isOpen, onClose }: MemberDe
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
       <div 
-        className="bg-base-100 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col relative overflow-hidden animate-in zoom-in-95 duration-200"
+        className="bg-base-100 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col relative animate-in zoom-in-95 duration-200"
         onClick={e => e.stopPropagation()}
       >
         
         {/* Header / Cover */}
-        <div className="h-32 bg-base-200/50 w-full relative border-b border-base-200">
+        <div className="h-28 bg-base-200/50 w-full relative border-b border-base-200 shrink-0 rounded-t-2xl overflow-hidden">
              <div className="absolute inset-0 bg-linear-to-r from-primary/5 via-transparent to-secondary/5"></div>
              <button 
                 onClick={onClose} 
@@ -39,39 +39,50 @@ export default function MemberDetailsModal({ member, isOpen, onClose }: MemberDe
              </button>
         </div>
 
-        {/* Profile Info Section within negative margin */}
-        <div className="px-6 relative flex flex-col flex-1 overflow-hidden">
-             
-             {/* Avatar & Basic Info Row */}
-             <div className="flex flex-col items-center -mt-12 mb-6 z-10">
-                 <div className="avatar placeholder mb-3">
-                    <div className="w-24 h-24 rounded-full ring-4 ring-base-100 bg-neutral text-neutral-content shadow-lg flex items-center justify-center">
-                        <span className="text-3xl font-bold">{member.displayName?.[0]}</span>
+        {/* Avatar - positioned to overlap header, NOT inside scroll container */}
+        <div className="flex flex-col items-center -mt-14 mb-4 z-10 px-6 shrink-0">
+            <div className="relative mb-3">
+                <div className="w-24 h-24 rounded-full ring-4 ring-base-100 bg-neutral text-neutral-content shadow-lg overflow-hidden relative">
+                    {/* Fallback initials - rendered first, behind image */}
+                    <div className="absolute inset-0 flex items-center justify-center z-0">
+                        <span className="text-3xl font-bold">{member.displayName?.[0] || '?'}</span>
                     </div>
-                    <div className={`absolute bottom-1 right-1 w-6 h-6 rounded-full border-4 border-base-100 ${active ? 'bg-success' : 'bg-base-300'}`}></div>
-                 </div>
-                 
-                 <h2 className="text-2xl font-bold text-base-content text-center leading-tight">
-                    {member.displayName}
-                 </h2>
-                 <p className="text-base-content/60 font-medium text-sm flex items-center gap-1.5 mt-1">
-                    <Briefcase size={14} />
-                    {member.jobTitle || 'Team Member'}
-                 </p>
-                 
-                 <div className="flex gap-2 mt-3">
-                     <span className={`badge ${active ? 'badge-success badge-outline' : 'badge-ghost'} gap-1 pl-1.5 pr-2.5`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-success' : 'bg-base-content/30'}`}></div>
-                        {active ? 'Online Now' : 'Offline'}
-                     </span>
-                     <span className="badge badge-ghost gap-1 pl-1.5 pr-2.5 uppercase text-[10px] font-bold tracking-wider text-base-content/40 border-base-content/10">
-                        {member.role || 'MEMBER'}
-                     </span>
-                 </div>
-             </div>
+                    {member.photoURL ? (
+                        <img 
+                            src={member.photoURL} 
+                            alt={member.displayName || 'User'} 
+                            className="w-full h-full object-cover absolute inset-0 z-10"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                            }}
+                        />
+                    ) : null}
+                </div>
+                <div className={`absolute bottom-1 right-1 w-6 h-6 rounded-full border-4 border-base-100 ${active ? 'bg-success' : 'bg-base-300'}`}></div>
+            </div>
+            
+            <h2 className="text-2xl font-bold text-base-content text-center leading-tight">
+                {member.displayName}
+            </h2>
+            <p className="text-base-content/60 font-medium text-sm flex items-center gap-1.5 mt-1">
+                <Briefcase size={14} />
+                {member.jobTitle || 'Team Member'}
+            </p>
+            
+            <div className="flex gap-2 mt-3">
+                <span className={`badge ${active ? 'badge-success badge-outline' : 'badge-ghost'} gap-1 pl-1.5 pr-2.5`}>
+                    <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-success' : 'bg-base-content/30'}`}></div>
+                    {active ? 'Online Now' : 'Offline'}
+                </span>
+                <span className="badge badge-ghost gap-1 pl-1.5 pr-2.5 uppercase text-[10px] font-bold tracking-wider text-base-content/40 border-base-content/10">
+                    {member.role || 'MEMBER'}
+                </span>
+            </div>
+        </div>
 
-             {/* Content Scrollable Area */}
-             <div className="flex-1 overflow-y-auto px-1 pb-6 space-y-6 scrollbar-none">
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto px-7 pb-6 space-y-6 scrollbar-none">
                  
                  {/* 1. Scope of Work / Bio */}
                  <div className="bg-base-200/50 rounded-xl p-4 border border-base-200">
@@ -130,7 +141,6 @@ export default function MemberDetailsModal({ member, isOpen, onClose }: MemberDe
                      </a>
                  </div>
 
-             </div>
         </div>
       </div>
     </div>

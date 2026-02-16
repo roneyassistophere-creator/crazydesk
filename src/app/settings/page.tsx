@@ -7,6 +7,7 @@ import { UserProfile, UserRole, UserStatus } from '@/types/auth';
 import { CheckCircle, XCircle, Clock, Users, Trash2, AlertTriangle, UserPlus, UserMinus } from 'lucide-react';
 import ConfirmationModal from '@/components/ui/ConfirmationModal';
 import { useRouter } from 'next/navigation';
+import UserAvatar from '@/components/common/UserAvatar';
 
 interface ModalConfig {
   isOpen: boolean;
@@ -281,7 +282,15 @@ export default function Settings() {
                     return requests.map((requestedRole, index) => (
                       <tr key={`${user.uid}-${requestedRole}`}>
                         <td className="font-medium">
-                          {user.displayName || 'N/A'}
+                          <div className="flex items-center gap-2">
+                             <UserAvatar 
+                                photoURL={user.photoURL} 
+                                displayName={user.displayName} 
+                                size="xs" 
+                                showRing={false}
+                              />
+                            {user.displayName || 'N/A'}
+                          </div>
                         </td>
                         <td>{user.email}</td>
                         <td>
@@ -361,11 +370,12 @@ export default function Settings() {
                     <tr key={user.uid}>
                       <td>
                         <div className="flex items-center gap-3">
-                          <div className="avatar placeholder">
-                            <div className="bg-neutral text-neutral-content rounded-full w-8">
-                              <span className="text-xs">{user.displayName?.[0] || 'U'}</span>
-                            </div>
-                          </div>
+                          <UserAvatar 
+                            photoURL={user.photoURL} 
+                            displayName={user.displayName} 
+                            size="sm" 
+                            showRing={false}
+                          />
                           <div>
                             <div className="font-bold">{user.displayName}</div>
                             <div className="text-xs opacity-50">{user.email}</div>

@@ -41,7 +41,7 @@ export default function Signup() {
 
         // If user already has this role approved, redirect them to dashboard
         if (currentAllowed.includes(role)) {
-          await setDoc(userRef, { role }, { merge: true });
+          await setDoc(userRef, { role, photoURL: user.photoURL }, { merge: true });
           router.push('/dashboard');
           return;
         }
@@ -53,6 +53,7 @@ export default function Signup() {
           requestedRoles: newRequested,
           displayName: user.displayName,
           email: user.email,
+          photoURL: user.photoURL, // Always sync Google photo
         };
         
         // Only set status to pending if not already approved for another role
@@ -67,6 +68,7 @@ export default function Signup() {
           uid: user.uid,
           displayName: user.displayName,
           email: user.email,
+          photoURL: user.photoURL, // Include Google photo
           role: role,
           requestedRoles: [role],
           allowedRoles: [],

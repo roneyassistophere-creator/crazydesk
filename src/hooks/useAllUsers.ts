@@ -1,18 +1,19 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { UserProfile } from '@/types/auth';
 
-export function useUsers() {
+/**
+ * Hook for admin/settings pages that need ALL users (including pending/rejected)
+ * ONLY use this in admin-protected pages
+ */
+export function useAllUsers() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // SECURITY: Only fetch approved users for team views
-    const q = query(
-      collection(db, 'users'),
-      where('status', '==', 'approved')
-    );
+    // Fetch ALL users for admin management
+    const q = query(collection(db, 'users'));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const usersList = snapshot.docs.map(doc => ({

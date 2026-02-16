@@ -9,5 +9,7 @@ export interface UserProfile {
   allowedRoles: UserRole[]; // List of all roles user has access to
   requestedRoles?: UserRole[]; // List of roles requested during signup
   status: UserStatus;
+  photoURL?: string; // URL for user profile picture
+  whatsapp?: string;
   createdAt: Date;
 }

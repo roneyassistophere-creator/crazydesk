@@ -58,6 +58,7 @@ export default function Login() {
           uid: user.uid,
           displayName: user.displayName,
           email: user.email,
+          photoURL: user.photoURL, // Include Google photo
           role: selectedRole,
           requestedRoles: [selectedRole],
           allowedRoles: [],
@@ -70,8 +71,8 @@ export default function Login() {
         const currentAllowed = currentData.allowedRoles || [];
 
         if (currentAllowed.includes(selectedRole)) {
-          // Already has this role — just switch to it
-          await setDoc(userRef, { role: selectedRole }, { merge: true });
+          // Already has this role — just switch to it and sync photo
+          await setDoc(userRef, { role: selectedRole, photoURL: user.photoURL }, { merge: true });
         } else {
           // Request the new role without breaking existing access
           const currentRequested = currentData.requestedRoles || [];
@@ -81,6 +82,7 @@ export default function Login() {
             requestedRoles: newRequested,
             displayName: user.displayName,
             email: user.email,
+            photoURL: user.photoURL, // Always sync Google photo
           };
 
           // Only set status to pending if not already approved for another role
