@@ -7,7 +7,7 @@ import { db } from '@/lib/firebase/config';
 import { Meeting } from '@/types/meeting';
 import CreateMeetingModal from '@/components/meetings/CreateMeetingModal';
 import MeetingListCard from '@/components/meetings/MeetingListCard';
-import { Plus, Loader2, Calendar, Clock } from 'lucide-react';
+import { Plus, Loader2, Calendar, Clock, AlertTriangle } from 'lucide-react';
 
 export default function MeetingsPage() {
   const { user, profile } = useAuth();
@@ -15,6 +15,8 @@ export default function MeetingsPage() {
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [meetingToEdit, setMeetingToEdit] = useState<Meeting | null>(null);
+  const [meetingToDelete, setMeetingToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -95,14 +97,21 @@ export default function MeetingsPage() {
     setIsModalOpen(true);
   };
 
-  const handleDelete = async (meetingId: string) => {
-    if (confirm('Are you sure you want to delete this meeting?')) {
-      try {
-        await deleteDoc(doc(db, 'meetings', meetingId));
-      } catch (error) {
-        console.error('Error deleting meeting:', error);
-        alert('Failed to delete meeting.');
-      }
+  const handleDeleteClick = (meetingId: string) => {
+    setMeetingToDelete(meetingId);
+  };
+
+  const confirmDelete = async () => {
+    if (!meetingToDelete) return;
+    setIsDeleting(true);
+    try {
+      await deleteDoc(doc(db, 'meetings', meetingToDelete));
+    } catch (error) {
+      console.error('Error deleting meeting:', error);
+      alert('Failed to delete meeting.');
+    } finally {
+      setIsDeleting(false);
+      setMeetingToDelete(null);
     }
   };
 
@@ -154,7 +163,7 @@ export default function MeetingsPage() {
                                 key={meeting.id} 
                                 meeting={meeting} 
                                 onEdit={handleEdit}
-                                onDelete={handleDelete}
+                                onDelete={handleDeleteClick}
                             />
                         ))}
                     </div>
@@ -176,7 +185,7 @@ export default function MeetingsPage() {
                                 key={meeting.id} 
                                 meeting={meeting} 
                                 onEdit={handleEdit}
-                                onDelete={handleDelete}
+                                onDelete={handleDeleteClick}
                             />
                         ))}
                     </div>
@@ -189,6 +198,50 @@ export default function MeetingsPage() {
             onClose={closeModal} 
             meetingToEdit={meetingToEdit}
         />
+
+        {/* Delete Confirmation Modal */}
+        {meetingToDelete && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <div className="bg-base-100 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-base-200 animate-in zoom-in-95 duration-200">
+                    <div className="flex flex-col items-center text-center gap-4">
+                        <div className="w-16 h-16 rounded-full bg-error/10 flex items-center justify-center mb-2">
+                            <AlertTriangle size={32} className="text-error" />
+                        </div>
+                        
+                        <div className="space-y-2">
+                            <h3 className="text-xl font-bold text-base-content">Delete Meeting?</h3>
+                            <p className="text-sm text-base-content/60">
+                                This action cannot be undone. Checks-in data associated with this meeting will remain safe.
+                            </p>
+                        </div>
+
+                        <div className="flex gap-3 w-full mt-4">
+                             <button 
+                                onClick={() => setMeetingToDelete(null)}
+                                className="btn btn-ghost flex-1"
+                                disabled={isDeleting}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={confirmDelete}
+                                className="btn btn-error flex-1"
+                                disabled={isDeleting}
+                            >
+                                {isDeleting ? (
+                                    <>
+                                        <Loader2 size={16} className="animate-spin" />
+                                        Deleting...
+                                    </>
+                                ) : (
+                                    'Delete'
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
     </div>
   );
 }

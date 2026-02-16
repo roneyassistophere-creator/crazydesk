@@ -1,12 +1,14 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useAuth } from "@/context/AuthContext";
-import { CheckCircle, Clock, Users, AlertCircle, Wrench, Calendar } from "lucide-react";
+import { CheckCircle, Clock, Users, AlertCircle, Wrench, Calendar, FileText } from "lucide-react";
 import Link from 'next/link';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { Meeting } from '@/types/meeting';
 import MeetingListCard from '@/components/meetings/MeetingListCard';
+import ActiveMembersCard from '@/components/dashboard/ActiveMembersCard';
+import CheckInOutWidget from '@/components/team/CheckInOutWidget';
 
 export default function Dashboard() {
   const { profile, user } = useAuth();
@@ -71,21 +73,24 @@ export default function Dashboard() {
           <h1 className="text-3xl font-bold text-base-content">Dashboard</h1>
           <p className="text-base-content/60">Welcome back, {profile?.displayName || 'User'} ({profile?.role})</p>
         </div>
-        <button className="btn btn-primary">
-          New Task
-        </button>
+        <div className="flex gap-2">
+          <Link href="/request-fix" className="btn btn-error text-white gap-2">
+            <Wrench size={18} />
+            Request Fix
+          </Link>
+          <button className="btn btn-success text-white">
+            New Task
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="stats shadow bg-base-200">
-          <div className="stat">
-            <div className="stat-figure text-primary">
-              <CheckCircle size={24} />
+        {/* Check In / Check Out Card */}
+        <div className="card bg-base-200 shadow pb-2">
+            <div className="card-body p-4 items-center justify-center">
+                <div className="text-sm font-bold opacity-70 mb-2 uppercase tracking-wide">Start Working</div>
+                <CheckInOutWidget />
             </div>
-            <div className="stat-title">Active Tasks</div>
-            <div className="stat-value text-primary">0</div>
-            <div className="stat-desc">21% more than last month</div>
-          </div>
         </div>
 
         <div className="stats shadow bg-base-200">
@@ -99,21 +104,29 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <Link href="/request-fix" className="stats shadow bg-base-200 hover:bg-base-300 transition-colors">
-          <div className="stat">
-            <div className={`stat-figure ${openRequestsCount > 0 ? 'text-error animate-pulse' : 'text-base-content/30'}`}>
-              <Wrench size={24} />
+        {/* Fix Request Card */}
+        <Link href="/request-fix" className="block h-full transition-transform hover:scale-[1.02]">
+            <div className="stats shadow bg-base-200 w-full h-full">
+                <div className="stat">
+                    <div className={`stat-figure ${openRequestsCount > 0 ? 'text-error animate-pulse' : 'text-base-content/30'}`}>
+                        <Wrench size={24} />
+                    </div>
+                    <div className="stat-title">Fix Requests</div>
+                    <div className={`stat-value ${openRequestsCount > 0 ? 'text-error' : ''}`}>{openRequestsCount}</div>
+                    <div className="stat-desc">
+                    {(profile?.role === 'ADMIN' || profile?.role === 'MANAGER') 
+                        ? 'Total open issues' 
+                        : 'Issues assigned to you'}
+                    </div>
+                </div>
             </div>
-            <div className="stat-title font-bold">Fix Requests</div>
-            <div className={`stat-value ${openRequestsCount > 0 ? 'text-error' : ''}`}>{openRequestsCount}</div>
-            <div className="stat-desc">
-              {(profile?.role === 'ADMIN' || profile?.role === 'MANAGER') 
-                ? 'Total open issues' 
-                : 'Issues assigned to you'}
-            </div>
-          </div>
         </Link>
         
+        {/* Active Members Card */}
+        <div className="h-full">
+            <ActiveMembersCard />
+        </div>
+
         {/* Meeting Cards directly in grid */}
         {upcomingMeetings.map(meeting => (
              <div key={meeting.id} className="h-full">

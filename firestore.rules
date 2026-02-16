@@ -19,6 +19,16 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN';
     }
 
+    // Helper function to check if user is admin or manager
+    function isManagerOrAdmin() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN' || 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'MANAGER'
+        );
+    }
+
     // Users collection rules
     match /users/{userId} {
       // Allow any authenticated user to read all profiles (for team lists, assignees, etc)
@@ -28,6 +38,23 @@ service cloud.firestore {
       
       // Allow creation of new user profile if user is authenticated and ID matches
       allow create: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Member Profiles (for Team Availability)
+    match /member_profiles/{userId} {
+      // Everyone can read availability
+      allow read: if isAuthenticated();
+      // Only Admins and Managers can edit/create availability profiles
+      // Allow owners to update their status (online/offline)
+      allow write: if isManagerOrAdmin() || isOwner(userId);
+    }
+
+    // Work Logs (for Reporting)
+    match /work_logs/{logId} {
+      // Users can read/write their own logs, Admins/Managers can read all
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isManagerOrAdmin());
     }
 
     // Fix Requests collection rules
