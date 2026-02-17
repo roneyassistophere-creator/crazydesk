@@ -43,6 +43,7 @@ interface TaskDoc {
   deadline: string;
   createdAt: Timestamp | null;
   createdBy: string;
+  createdByName?: string;
   links?: { title: string; url: string; id: number }[];
   customColumns?: CustomColumn[];
   [key: string]: unknown;
@@ -823,20 +824,42 @@ export default function TaskManager() {
   const [columnModalOpen, setColumnModalOpen] = useState(false);
   const [columnModalListId, setColumnModalListId] = useState<string | null>(null);
 
-  // Permissions — all authenticated users can manage tasks
-  const canEdit = !!user;
+  // Permissions — role-based
+  const isManagerOrAdmin = profile?.role === 'ADMIN' || profile?.role === 'MANAGER';
   const canAddTasks = !!user;
-  const canDelete = !!user;
-  const canChangeStatus = !!user;
+
+  // Per-task permission checks
+  const canEditTask = (task: TaskDoc) => {
+    if (!user) return false;
+    if (isManagerOrAdmin) return true;
+    // Team members can only edit tasks they created
+    return task.createdBy === user.uid;
+  };
+
+  const canDeleteTask = (task: TaskDoc) => {
+    if (!user) return false;
+    if (isManagerOrAdmin) return true;
+    // Team members can only delete tasks they created
+    return task.createdBy === user.uid;
+  };
+
+  const canChangeTaskStatus = (task: TaskDoc) => {
+    if (!user) return false;
+    // Everyone can change status (check a box, move to done, etc.)
+    return true;
+  };
 
   // ─── Firestore: Listen for tasks ────────────────────────
+  // Admins/Managers see ALL tasks; Team Members/Clients see only their own
   useEffect(() => {
     if (!user) { setLoading(false); return; }
 
-    const q = query(
-      collection(db, 'tasks'),
-      orderBy('createdAt', 'desc'),
-    );
+    const tasksCol = collection(db, 'tasks');
+    const q = isManagerOrAdmin
+      ? query(tasksCol, orderBy('createdAt', 'desc'))
+      : query(tasksCol, where('createdBy', '==', user.uid), orderBy('createdAt', 'desc'));
+
+    const subUnsubs: (() => void)[] = [];
 
     const unsub = onSnapshot(q, (snapshot) => {
       const items: TaskDoc[] = snapshot.docs.map(d => ({
@@ -846,27 +869,35 @@ export default function TaskManager() {
       setTasks(items);
       setLoading(false);
 
+      // Clean up previous subtask listeners
+      subUnsubs.forEach(u => u());
+      subUnsubs.length = 0;
+
       // Subscribe to subtasks for each list task
       items.filter(t => t.type === 'list').forEach(list => {
         const subQ = query(
           collection(db, 'tasks', list.id, 'subtasks'),
           orderBy('createdAt', 'asc'),
         );
-        onSnapshot(subQ, (subSnap) => {
+        const subUnsub = onSnapshot(subQ, (subSnap) => {
           const subs: SubTaskDoc[] = subSnap.docs.map(d => ({
             id: d.id,
             ...d.data(),
           })) as SubTaskDoc[];
           setSubTasks(prev => ({ ...prev, [list.id]: subs }));
         });
+        subUnsubs.push(subUnsub);
       });
     }, (error) => {
       console.error('Tasks listener error:', error);
       setLoading(false);
     });
 
-    return () => unsub();
-  }, [user]);
+    return () => {
+      unsub();
+      subUnsubs.forEach(u => u());
+    };
+  }, [user, isManagerOrAdmin]);
 
   const simpleTasks = tasks.filter(t => t.type === 'simple');
   const listTasks = tasks.filter(t => t.type === 'list');
@@ -881,6 +912,7 @@ export default function TaskManager() {
       deadline: '',
       createdAt: serverTimestamp(),
       createdBy: user!.uid,
+      createdByName: user!.displayName || user!.email || 'Unknown',
     });
   };
 
@@ -894,6 +926,7 @@ export default function TaskManager() {
       customColumns: [],
       createdAt: serverTimestamp(),
       createdBy: user!.uid,
+      createdByName: user!.displayName || user!.email || 'Unknown',
     });
     setExpandedLists(prev => new Set(prev).add(ref.id));
   };
@@ -1064,23 +1097,28 @@ export default function TaskManager() {
                       <th className="min-w-[120px]">Task Name</th>
                       <th className="w-24 sm:w-32 min-w-[96px]">Status</th>
                       <th className="w-32 sm:w-36 min-w-[100px]">Due Date</th>
-                      {canDelete && <th className="w-8 sm:w-10"></th>}
+                      {isManagerOrAdmin && <th className="w-28 min-w-[100px]">Created By</th>}
+                      <th className="w-8 sm:w-10"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filterTasks(simpleTasks).map(task => (
+                    {filterTasks(simpleTasks).map(task => {
+                      const taskEditable = canEditTask(task);
+                      const taskDeletable = canDeleteTask(task);
+                      const taskStatusChangeable = canChangeTaskStatus(task);
+                      return (
                       <tr key={task.id} className="hover group">
                         <td>
                           <input
                             type="checkbox"
                             className="checkbox checkbox-xs sm:checkbox-sm checkbox-primary"
                             checked={task.status === 'done'}
-                            onChange={() => canChangeStatus && updateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done' })}
-                            disabled={!canChangeStatus}
+                            onChange={() => taskStatusChangeable && updateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done' })}
+                            disabled={!taskStatusChangeable}
                           />
                         </td>
                         <td>
-                          {canEdit ? (
+                          {taskEditable ? (
                             <EditableCell
                               value={task.title}
                               onSave={val => updateTask(task.id, { title: val })}
@@ -1094,7 +1132,7 @@ export default function TaskManager() {
                           )}
                         </td>
                         <td>
-                          {canChangeStatus ? (
+                          {taskStatusChangeable ? (
                             <StatusDropdown value={task.status} onChange={val => updateTask(task.id, { status: val })} />
                           ) : (
                             <span className={`badge badge-sm ${task.status === 'done' ? 'badge-success' : task.status === 'in_progress' ? 'badge-warning' : task.status === 'review' ? 'badge-info' : 'badge-ghost'}`}>
@@ -1103,24 +1141,32 @@ export default function TaskManager() {
                           )}
                         </td>
                         <td>
-                          {canEdit ? (
+                          {taskEditable ? (
                             <DatePickerPopover value={task.deadline} onSave={val => updateTask(task.id, { deadline: val })} placeholder="Set date" className="text-xs" />
                           ) : (
                             <span className="text-xs sm:text-sm px-2">{task.deadline ? new Date(task.deadline).toLocaleDateString() : '-'}</span>
                           )}
                         </td>
-                        {canDelete && (
+                        {isManagerOrAdmin && (
                           <td>
+                            <span className="text-xs text-base-content/60 truncate block max-w-[100px]" title={task.createdByName || 'Unknown'}>
+                              {task.createdByName || 'Unknown'}
+                            </span>
+                          </td>
+                        )}
+                        <td>
+                          {taskDeletable && (
                             <button
                               onClick={() => showConfirm('Delete Task', `Are you sure you want to delete "${task.title}"?`, () => deleteTask(task.id))}
                               className="btn btn-ghost btn-xs text-error opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
                             >
                               <Trash2 className="w-3 h-3 sm:w-4 sm:h-4" />
                             </button>
-                          </td>
-                        )}
+                          )}
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1137,7 +1183,11 @@ export default function TaskManager() {
               </div>
 
               <div className="space-y-3 sm:space-y-4">
-                {filterTasks(listTasks).map(list => (
+                {filterTasks(listTasks).map(list => {
+                  const listEditable = canEditTask(list);
+                  const listDeletable = canDeleteTask(list);
+                  const listStatusChangeable = canChangeTaskStatus(list);
+                  return (
                   <div key={list.id} className="border border-base-200 rounded-lg overflow-hidden bg-base-100 shadow-sm">
                     {/* List Header */}
                     <div className="bg-base-200/30 p-2 sm:p-3 border-b border-base-200 overflow-x-auto">
@@ -1147,7 +1197,7 @@ export default function TaskManager() {
                         </button>
 
                         <div className="flex-1 min-w-[100px] sm:min-w-[150px]">
-                          {canEdit ? (
+                          {listEditable ? (
                             <EditableCell value={list.title} onSave={val => updateTask(list.id, { title: val })} placeholder="List name..." className="font-semibold text-sm sm:text-base" />
                           ) : (
                             <span className="font-semibold text-sm sm:text-base px-2">{list.title || 'Untitled List'}</span>
@@ -1155,7 +1205,7 @@ export default function TaskManager() {
                         </div>
 
                         <div className="flex-shrink-0">
-                          {canChangeStatus ? (
+                          {listStatusChangeable ? (
                             <StatusDropdown value={list.status} onChange={val => updateTask(list.id, { status: val })} />
                           ) : (
                             <span className={`badge badge-xs sm:badge-sm ${list.status === 'done' ? 'badge-success' : list.status === 'in_progress' ? 'badge-warning' : list.status === 'review' ? 'badge-info' : 'badge-ghost'}`}>
@@ -1165,7 +1215,7 @@ export default function TaskManager() {
                         </div>
 
                         <div className="flex-shrink-0">
-                          {canEdit ? (
+                          {listEditable ? (
                             <PriorityDropdown value={list.priority} onChange={val => updateTask(list.id, { priority: val })} />
                           ) : (
                             <span className={`badge badge-sm ${list.priority === 'urgent' ? 'text-error bg-error/10' : list.priority === 'high' ? 'text-warning bg-warning/10' : list.priority === 'low' ? 'text-success bg-success/10' : 'text-info bg-info/10'}`}>
@@ -1175,20 +1225,26 @@ export default function TaskManager() {
                         </div>
 
                         <div className="flex-shrink-0">
-                          {canEdit ? (
+                          {listEditable ? (
                             <DatePickerPopover value={list.deadline} onSave={val => updateTask(list.id, { deadline: val })} placeholder="Due date" className="text-xs" />
                           ) : (
                             <span className="text-xs px-2">{list.deadline ? new Date(list.deadline).toLocaleDateString() : '-'}</span>
                           )}
                         </div>
 
-                        {canDelete && (
+                        {listDeletable && (
                           <button
                             onClick={() => showConfirm('Delete List', `Are you sure you want to delete "${list.title}" and all its subtasks?`, () => deleteTask(list.id))}
                             className="btn btn-ghost btn-xs text-error flex-shrink-0"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
+                        )}
+
+                        {isManagerOrAdmin && list.createdByName && (
+                          <span className="text-[10px] text-base-content/40 flex-shrink-0" title={`Created by ${list.createdByName}`}>
+                            by {list.createdByName}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -1207,7 +1263,7 @@ export default function TaskManager() {
                                 <th className="w-28 min-w-[112px]">Due Date</th>
                                 {(list.customColumns || []).map(col => (
                                   <th key={col.id} className="w-28 min-w-[112px]">
-                                    {canEdit ? (
+                                    {listEditable ? (
                                       <ColumnHeader
                                         column={col}
                                         onSave={newName => updateCustomColumnName(list.id, col.id, newName)}
@@ -1218,31 +1274,31 @@ export default function TaskManager() {
                                     )}
                                   </th>
                                 ))}
-                                {canEdit && (
+                                {listEditable && (
                                   <th className="w-10">
                                     <button onClick={() => openColumnModal(list.id)} className="btn btn-ghost btn-xs btn-circle text-primary hover:bg-primary/10" title="Add custom column">
                                       <Plus className="w-4 h-4" />
                                     </button>
                                   </th>
                                 )}
-                                {canEdit && <th className="w-8"></th>}
+                                {listEditable && <th className="w-8"></th>}
                               </tr>
                             </thead>
                             <tbody>
                               {(subTasks[list.id] || []).map(sub => (
                                 <tr key={sub.id} className="hover group">
                                   <td>
-                                    <input type="checkbox" className="checkbox checkbox-xs checkbox-primary" checked={sub.status === 'done'} onChange={() => canChangeStatus && updateSubTask(list.id, sub.id, { status: sub.status === 'done' ? 'todo' : 'done' })} disabled={!canChangeStatus} />
+                                    <input type="checkbox" className="checkbox checkbox-xs checkbox-primary" checked={sub.status === 'done'} onChange={() => listStatusChangeable && updateSubTask(list.id, sub.id, { status: sub.status === 'done' ? 'todo' : 'done' })} disabled={!listStatusChangeable} />
                                   </td>
                                   <td>
-                                    {canEdit ? (
+                                    {listEditable ? (
                                       <EditableCell value={sub.title} onSave={val => updateSubTask(list.id, sub.id, { title: val })} placeholder="Subtask name..." className={`text-sm ${sub.status === 'done' ? 'line-through opacity-50' : ''}`} />
                                     ) : (
                                       <span className={`text-sm px-2 ${sub.status === 'done' ? 'line-through opacity-50' : ''}`}>{sub.title || 'Untitled Subtask'}</span>
                                     )}
                                   </td>
                                   <td>
-                                    {canChangeStatus ? (
+                                    {listStatusChangeable ? (
                                       <StatusDropdown value={sub.status} onChange={val => updateSubTask(list.id, sub.id, { status: val })} />
                                     ) : (
                                       <span className={`badge badge-sm ${sub.status === 'done' ? 'badge-success' : sub.status === 'in_progress' ? 'badge-warning' : sub.status === 'review' ? 'badge-info' : 'badge-ghost'}`}>
@@ -1251,7 +1307,7 @@ export default function TaskManager() {
                                     )}
                                   </td>
                                   <td>
-                                    {canEdit ? (
+                                    {listEditable ? (
                                       <PriorityDropdown value={sub.priority} onChange={val => updateSubTask(list.id, sub.id, { priority: val })} />
                                     ) : (
                                       <span className={`badge badge-sm ${sub.priority === 'urgent' ? 'text-error bg-error/10' : sub.priority === 'high' ? 'text-warning bg-warning/10' : sub.priority === 'low' ? 'text-success bg-success/10' : 'text-info bg-info/10'}`}>
@@ -1260,7 +1316,7 @@ export default function TaskManager() {
                                     )}
                                   </td>
                                   <td>
-                                    {canEdit ? (
+                                    {listEditable ? (
                                       <DatePickerPopover value={sub.deadline} onSave={val => updateSubTask(list.id, sub.id, { deadline: val })} placeholder="Set date" className="text-xs" />
                                     ) : (
                                       <span className="text-xs px-2">{sub.deadline ? new Date(sub.deadline).toLocaleDateString() : '-'}</span>
@@ -1268,15 +1324,15 @@ export default function TaskManager() {
                                   </td>
                                   {(list.customColumns || []).map(col => (
                                     <td key={col.id}>
-                                      {canEdit ? (
+                                      {listEditable ? (
                                         <CustomFieldCell column={col} value={sub.customFields?.[col.id]} onSave={val => updateSubTaskCustomField(list.id, sub.id, col.id, val)} />
                                       ) : (
                                         <span className="text-xs px-2">{sub.customFields?.[col.id] != null ? String(sub.customFields[col.id]) : '-'}</span>
                                       )}
                                     </td>
                                   ))}
-                                  {canEdit && <td></td>}
-                                  {canDelete && (
+                                  {listEditable && <td></td>}
+                                  {listDeletable && (
                                     <td>
                                       <button onClick={() => showConfirm('Delete Subtask', `Are you sure you want to delete "${sub.title}"?`, () => deleteSubTask(list.id, sub.id))} className="btn btn-ghost btn-xs text-error opacity-0 group-hover:opacity-100">
                                         <Trash2 className="w-3 h-3" />
@@ -1297,7 +1353,8 @@ export default function TaskManager() {
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

@@ -7,10 +7,14 @@
    • Screen + camera capture, check-in/out/break, report
    ═══════════════════════════════════════════════════════════════ */
 
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+const envPath = require('path').join(__dirname, '.env');
+const dotenvResult = require('dotenv').config({ path: envPath });
+if (dotenvResult.error) {
+  console.warn('[App] .env file not found or unreadable:', envPath);
+}
 
 const {
-  app, BrowserWindow, Tray, Menu, ipcMain,
+  app, BrowserWindow, Tray, Menu, ipcMain, dialog,
   nativeImage, desktopCapturer, Notification, shell,
   systemPreferences, protocol, net,
 } = require('electron');
@@ -19,6 +23,18 @@ const fs = require('fs');
 
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
+
+// ─── Catch unhandled errors (helps diagnose Windows crashes) ──
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH] Uncaught exception:', err);
+  try {
+    dialog.showErrorBox('CrazyDesk Error', `An unexpected error occurred:\n\n${err.message}\n\nThe app will continue running.`);
+  } catch (_) {}
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH] Unhandled promise rejection:', reason);
+});
 
 // ─── Register custom protocol for serving local files with correct MIME types ──
 // This fixes ES module imports on Windows where file:// doesn't provide MIME types
@@ -30,8 +46,14 @@ const MIME_TYPES = {
   '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
 };
 
 protocol.registerSchemesAsPrivileged([{
@@ -114,12 +136,32 @@ function createWindow() {
   // Ensure renderer stays active when window is hidden (for background captures)
   mainWindow.webContents.setBackgroundThrottling(false);
 
+  // Debug: log page load failures (helps diagnose Windows issues)
+  mainWindow.webContents.on('did-fail-load', (_ev, errorCode, errorDescription, validatedURL) => {
+    console.error(`[Window] Failed to load: ${validatedURL} — ${errorDescription} (${errorCode})`);
+  });
+
+  // Debug: log console messages from renderer
+  mainWindow.webContents.on('console-message', (_ev, level, message, line, sourceId) => {
+    const levelStr = ['verbose', 'info', 'warning', 'error'][level] || 'log';
+    if (level >= 2) { // Only warnings and errors
+      console.log(`[Renderer:${levelStr}] ${message} (${sourceId}:${line})`);
+    }
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
     shell.openExternal(linkUrl);
     return { action: 'deny' };
   });
 
   mainWindow.on('ready-to-show', () => mainWindow.show());
+
+  // Allow opening DevTools with F12 or Ctrl/Cmd+Shift+I for debugging
+  mainWindow.webContents.on('before-input-event', (_ev, input) => {
+    if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
+      mainWindow.webContents.toggleDevTools();
+    }
+  });
 
   // Override Page Visibility API so captures work when window is hidden.
   // Without this, Chromium pauses timers/media when document.hidden = true.
@@ -144,8 +186,10 @@ function createWindow() {
   });
 
   // Check if launched with a deep link URL in argv
+  // On Windows, the deep link URL may be the last argument
   const deepLinkArg = process.argv.find(a => a.startsWith(`${PROTOCOL}://`));
   if (deepLinkArg) {
+    console.log('[DeepLink] Found deep link in argv:', deepLinkArg.substring(0, 50) + '...');
     mainWindow.webContents.once('did-finish-load', () => {
       handleDeepLink(deepLinkArg);
     });
@@ -195,6 +239,8 @@ function updateTrayMenu(status) {
 // ─── Deep link handler ───────────────────────────────────────
 function handleDeepLink(url) {
   try {
+    // Clean up the URL — Windows may add trailing slashes or quotes
+    url = url.trim().replace(/^["']|["']$/g, '');
     console.log('[DeepLink] Raw URL length:', url.length);
 
     // Manual parse — more robust than new URL() for long tokens
@@ -335,22 +381,41 @@ ipcMain.handle('upload-image', async (_ev, { buffer, prefix, userId }) => {
 
 // ─── App lifecycle ───────────────────────────────────────────
 app.whenReady().then(() => {
+  console.log('[App] Ready. Platform:', process.platform, 'Arch:', process.arch);
+  console.log('[App] __dirname:', __dirname);
+  console.log('[App] argv:', process.argv.map(a => a.length > 80 ? a.substring(0, 80) + '...' : a));
+
   // Register custom protocol to serve local files with correct MIME types
   // This ensures ES module imports work on Windows (file:// doesn't provide MIME types)
   protocol.handle('app', (request) => {
     // app://crazydesk/renderer/index.html → __dirname/renderer/index.html
-    const requestUrl = new URL(request.url);
-    // Remove leading slash for Windows compatibility
-    let filePath = decodeURIComponent(requestUrl.pathname);
-    if (filePath.startsWith('/')) filePath = filePath.substring(1);
+    let filePath;
+    try {
+      const requestUrl = new URL(request.url);
+      // Remove leading slash for Windows compatibility
+      filePath = decodeURIComponent(requestUrl.pathname);
+      if (filePath.startsWith('/')) filePath = filePath.substring(1);
+    } catch (e) {
+      console.error('[Protocol] Failed to parse URL:', request.url, e.message);
+      return new Response('Bad Request', { status: 400 });
+    }
+
+    // Normalize path separators for the current platform
+    filePath = path.normalize(filePath);
     const fullPath = path.join(__dirname, filePath);
 
     try {
       // Security: ensure the path stays within __dirname
       const resolved = path.resolve(fullPath);
       const base = path.resolve(__dirname);
-      if (!resolved.startsWith(base)) {
+      if (!resolved.startsWith(base + path.sep) && resolved !== base) {
+        console.error('[Protocol] Path traversal blocked:', resolved);
         return new Response('Forbidden', { status: 403 });
+      }
+
+      if (!fs.existsSync(resolved)) {
+        console.error('[Protocol] File not found:', resolved);
+        return new Response('Not Found', { status: 404 });
       }
 
       const data = fs.readFileSync(resolved);
@@ -362,8 +427,8 @@ app.whenReady().then(() => {
         headers: { 'Content-Type': mimeType },
       });
     } catch (e) {
-      console.error('[Protocol] File not found:', fullPath, e.message);
-      return new Response('Not Found', { status: 404 });
+      console.error('[Protocol] Error serving file:', fullPath, e.message);
+      return new Response('Internal Server Error', { status: 500 });
     }
   });
 

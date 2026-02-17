@@ -96,11 +96,26 @@ service cloud.firestore {
 
     // Tasks collection rules
     match /tasks/{taskId} {
-      allow read, write: if isAuthenticated();
+      // Admins/Managers can read all tasks; others can only read their own
+      allow read: if isManagerOrAdmin() || 
+        (isAuthenticated() && resource.data.createdBy == request.auth.uid);
+      // Anyone authenticated can create tasks
+      allow create: if isAuthenticated();
+      // Admins/Managers can update/delete any task
+      // Team members can only update/delete tasks they created
+      allow update, delete: if isManagerOrAdmin() || 
+        (isAuthenticated() && resource.data.createdBy == request.auth.uid);
 
       // Subtasks subcollection
       match /subtasks/{subtaskId} {
-        allow read, write: if isAuthenticated();
+        // Readable if user can read the parent task
+        allow read: if isManagerOrAdmin() || 
+          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.createdBy == request.auth.uid);
+        allow create: if isAuthenticated();
+        // Admins/Managers can update/delete any subtask
+        // Team members can only modify subtasks under tasks they own
+        allow update, delete: if isManagerOrAdmin() || 
+          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.createdBy == request.auth.uid);
       }
     }
 
