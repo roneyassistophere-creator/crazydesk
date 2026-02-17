@@ -57,22 +57,50 @@ interface CheckedInUser {
   source?: string;
 }
 
-type DateFilter = 'today' | 'week' | 'month';
+type DateFilter = 'today' | 'yesterday' | 'last7' | 'last30' | 'all';
 
 // ─── Constants ────────────────────────────────────────────────
 const AUTO_DELETE_DAYS = 30;
 
 // ─── Helpers ──────────────────────────────────────────────────
-const dateRangeStart = (f: DateFilter): Date => {
+const dateRangeStart = (f: DateFilter): Date | null => {
   const n = new Date();
-  if (f === 'today') return new Date(n.getFullYear(), n.getMonth(), n.getDate());
-  if (f === 'week') {
+  n.setHours(0, 0, 0, 0);
+  if (f === 'today') return n;
+  if (f === 'yesterday') {
     const d = new Date(n);
-    d.setDate(n.getDate() - n.getDay());
-    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - 1);
     return d;
   }
-  return new Date(n.getFullYear(), n.getMonth(), 1);
+  if (f === 'last7') {
+    const d = new Date(n);
+    d.setDate(d.getDate() - 7);
+    return d;
+  }
+  if (f === 'last30') {
+    const d = new Date(n);
+    d.setDate(d.getDate() - 30);
+    return d;
+  }
+  return null; // 'all'
+};
+
+const dateRangeEnd = (f: DateFilter): Date | null => {
+  if (f === 'yesterday') {
+    const n = new Date();
+    n.setHours(0, 0, 0, 0);
+    return n; // End of yesterday = start of today
+  }
+  return null;
+};
+
+// Format time as 12-hour with AM/PM
+const formatTime12h = (date: Date): string => {
+  return date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 };
 
 const filenameFromUrl = (url: string): string | null => {
@@ -91,6 +119,10 @@ export default function WebTrackerPage() {
   const [loading, setLoading] = useState(true);
   const [trackingActive, setTrackingActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Lightbox for viewing images
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [lightboxLog, setLightboxLog] = useState<TrackerLog | null>(null);
 
   // Filters
   const [selectedUser, setSelectedUser] = useState<string>('ALL');
@@ -188,7 +220,14 @@ export default function WebTrackerPage() {
   // ── Filter logs by date ─────────────────────────────────────
   const filteredLogs = useMemo(() => {
     const start = dateRangeStart(dateFilter);
-    return logs.filter(l => { const d = l.timestamp?.toDate?.(); return d && d >= start; });
+    const end = dateRangeEnd(dateFilter);
+    return logs.filter(l => {
+      const d = l.timestamp?.toDate?.();
+      if (!d) return false;
+      if (start && d < start) return false;
+      if (end && d >= end) return false;
+      return true;
+    });
   }, [logs, dateFilter]);
 
   // ── Auto-delete 30-day-old logs (admin, runs once) ─────────
@@ -304,7 +343,13 @@ export default function WebTrackerPage() {
     <div className="p-8 flex justify-center"><span className="loading loading-spinner loading-lg" /></div>
   );
 
-  const label: Record<DateFilter, string> = { today: 'Today', week: 'This Week', month: 'This Month' };
+  const label: Record<DateFilter, string> = {
+    today: 'Today',
+    yesterday: 'Yesterday',
+    last7: 'Last 7 Days',
+    last30: 'Last 30 Days',
+    all: 'All Time',
+  };
 
   return (
     <div className="space-y-6">
@@ -396,16 +441,17 @@ export default function WebTrackerPage() {
 
       {/* ─── Date filters ─── */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="tabs tabs-boxed bg-base-200">
-          {(['today', 'week', 'month'] as DateFilter[]).map(f => (
-            <button key={f} className={`tab gap-2 ${dateFilter === f ? 'tab-active' : ''}`} onClick={() => setDateFilter(f)}>
-              {f === 'today' && <Calendar size={14} />}
-              {f === 'week' && <CalendarDays size={14} />}
-              {f === 'month' && <CalendarRange size={14} />}
-              {label[f]}
-            </button>
-          ))}
-        </div>
+        <select
+          className="select select-bordered select-sm"
+          value={dateFilter}
+          onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+        >
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+          <option value="last7">Last 7 Days</option>
+          <option value="last30">Last 30 Days</option>
+          <option value="all">All Time</option>
+        </select>
         <span className="text-sm text-base-content/50">{filteredLogs.length} log{filteredLogs.length !== 1 ? 's' : ''}</span>
       </div>
 
@@ -438,7 +484,16 @@ export default function WebTrackerPage() {
       {/* ─── Log Grid ─── */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
         {filteredLogs.map(log => (
-          <div key={log.id} className={`card bg-base-100 shadow-xl border ${log.flagged ? 'border-error/50' : 'border-base-200'}`}>
+          <div
+            key={log.id}
+            className={`card bg-base-100 shadow-xl border cursor-pointer hover:shadow-2xl transition-shadow ${log.flagged ? 'border-error/50' : 'border-base-200'}`}
+            onClick={() => {
+              if (!log.flagged && (log.screenshotUrl || log.cameraImageUrl)) {
+                setLightboxLog(log);
+                setLightboxImage(log.screenshotUrl || log.cameraImageUrl || null);
+              }
+            }}
+          >
             <figure className="relative h-48 bg-black/10 group">
               {log.flagged ? (
                 <div className="flex flex-col items-center justify-center w-full h-full bg-error/5 text-error/60 p-4">
@@ -454,13 +509,20 @@ export default function WebTrackerPage() {
               )}
 
               {log.cameraImageUrl && !log.flagged && (
-                <div className="absolute bottom-2 right-2 w-16 h-16 rounded-lg overflow-hidden border-2 border-white shadow-lg">
+                <div
+                  className="absolute bottom-2 right-2 w-16 h-16 rounded-lg overflow-hidden border-2 border-white shadow-lg cursor-pointer hover:scale-110 transition-transform"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setLightboxLog(log);
+                    setLightboxImage(log.cameraImageUrl || null);
+                  }}
+                >
                   <img src={log.cameraImageUrl} alt="Camera" className="object-cover w-full h-full" />
                 </div>
               )}
 
               <div className="absolute top-2 left-2 badge badge-sm bg-black/50 text-white border-none">
-                {log.timestamp?.toDate?.().toLocaleTimeString() || ''}
+                {log.timestamp?.toDate?.() ? formatTime12h(log.timestamp.toDate()) : ''}
               </div>
 
               <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : log.type === 'manual' ? 'badge-info text-white' : 'badge-ghost'}`}>
@@ -496,6 +558,62 @@ export default function WebTrackerPage() {
           </div>
         )}
       </div>
+
+      {/* ─── Image Lightbox Modal ─── */}
+      {lightboxImage && lightboxLog && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+          onClick={() => { setLightboxImage(null); setLightboxLog(null); }}
+        >
+          <div className="relative max-w-6xl max-h-[90vh] w-full" onClick={(e) => e.stopPropagation()}>
+            {/* Close button */}
+            <button
+              className="absolute -top-12 right-0 btn btn-sm btn-circle btn-ghost text-white hover:bg-white/20"
+              onClick={() => { setLightboxImage(null); setLightboxLog(null); }}
+            >
+              ✕
+            </button>
+
+            {/* Main image */}
+            <img
+              src={lightboxImage}
+              alt="Full size"
+              className="w-full h-auto max-h-[80vh] object-contain rounded-lg"
+            />
+
+            {/* Image info bar */}
+            <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white p-4 rounded-b-lg flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <span className="text-sm font-semibold">{lightboxLog.userDisplayName}</span>
+                <span className="text-sm opacity-70">
+                  {lightboxLog.timestamp?.toDate?.()?.toLocaleDateString()} at {lightboxLog.timestamp?.toDate?.() ? formatTime12h(lightboxLog.timestamp.toDate()) : ''}
+                </span>
+                <span className={`badge badge-sm ${lightboxLog.type === 'manual' ? 'badge-info' : 'badge-ghost'}`}>
+                  {lightboxLog.type === 'manual' ? 'Manual' : 'Auto'}
+                </span>
+              </div>
+
+              {/* Toggle between screen and camera */}
+              {lightboxLog.screenshotUrl && lightboxLog.cameraImageUrl && (
+                <div className="flex gap-2">
+                  <button
+                    className={`btn btn-sm ${lightboxImage === lightboxLog.screenshotUrl ? 'btn-primary' : 'btn-ghost text-white'}`}
+                    onClick={() => setLightboxImage(lightboxLog.screenshotUrl!)}
+                  >
+                    <Monitor size={16} /> Screen
+                  </button>
+                  <button
+                    className={`btn btn-sm ${lightboxImage === lightboxLog.cameraImageUrl ? 'btn-primary' : 'btn-ghost text-white'}`}
+                    onClick={() => setLightboxImage(lightboxLog.cameraImageUrl!)}
+                  >
+                    <Camera size={16} /> Camera
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
