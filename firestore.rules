@@ -64,9 +64,49 @@ service cloud.firestore {
       allow read, write: if isAuthenticated();
     }
 
+    // Tracker Logs (for Web Tracker)
+    match /tracker_logs/{logId} {
+      // Users can read their own logs, Admins/Managers can read all
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isManagerOrAdmin());
+      
+      // Users can create logs for themselves, Admins/Managers can create for any user (remote capture)
+      allow create: if isAuthenticated() && 
+        (request.resource.data.userId == request.auth.uid || isManagerOrAdmin());
+      
+      // Admins/Managers can delete (individual or bulk cleanup)
+      allow delete: if isManagerOrAdmin();
+    }
+
     // Meetings collection rules
     match /meetings/{meetingId} {
       allow read, write: if isAuthenticated();
+    }
+
+    // Activity Logs (for Web Tracker - mouse movements, clicks, keystrokes)
+    match /activity_logs/{logId} {
+      // Users can read their own activity logs, Admins/Managers can read all
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isManagerOrAdmin());
+      
+      // Users can create activity logs for themselves
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      // Only Admins/Managers can delete (for cleanup)
+      allow delete: if isManagerOrAdmin();
+    }
+
+    // Capture Commands (remote capture triggers from web → desktop app)
+    match /capture_commands/{commandId} {
+      // Users can read their own capture commands (desktop app polls these)
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      
+      // Managers/Admins can create capture commands for any user
+      allow create: if isManagerOrAdmin();
+      
+      // Users can update their own commands (mark as completed), Managers can also update
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isManagerOrAdmin());
+      
+      // Managers/Admins can delete commands
+      allow delete: if isManagerOrAdmin();
     }
   }
 }

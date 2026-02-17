@@ -4,6 +4,16 @@ export interface BreakSession {
   durationMinutes?: number;
 }
 
+export interface TrackerLog {
+  id: string;
+  userId: string;
+  userDisplayName: string;
+  timestamp: any;
+  screenshotUrl?: string;
+  cameraImageUrl?: string;
+  type: 'auto' | 'manual';
+}
+
 export interface WorkLog {
   id: string;
   userId: string;
@@ -16,4 +26,6 @@ export interface WorkLog {
   report?: string;
   attachments?: string[];
   status: 'active' | 'break' | 'completed';
+  source?: 'browser' | 'desktop';
+  trackerSessionId?: string;
 }

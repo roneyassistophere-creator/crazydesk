@@ -13,9 +13,11 @@ import {
   Wrench,
   LogOut,
   UserCircle,
-  Settings
+  Settings,
+  Eye
 } from 'lucide-react';
 import ThemeController from './ThemeController';
+import CheckInOutWidget from '@/components/team/CheckInOutWidget';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, RefreshCw } from 'lucide-react';
@@ -30,6 +32,7 @@ const menuItems = [
   { name: 'Communication', icon: MessageSquare, href: '/communication' },
   { name: 'Resources', icon: FolderOpen, href: '/resources' },
   { name: 'Meetings', icon: Calendar, href: '/meetings' },
+  { name: 'Web Tracker', icon: Eye, href: '/web-tracker' },
   { name: 'Request a Fix', icon: Wrench, href: '/request-fix' },
 ];
 
@@ -167,6 +170,11 @@ export default function Sidebar() {
           })}
         </ul>
       </nav>
+
+      {/* Persistent check-in widget — never unmounts during navigation */}
+      <div className="px-4 pb-2">
+        <CheckInOutWidget compact />
+      </div>
 
       <div className="p-4 border-t border-base-300">
         <div className="dropdown dropdown-top w-full">

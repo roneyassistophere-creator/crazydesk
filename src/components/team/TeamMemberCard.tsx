@@ -1,6 +1,10 @@
 import { MemberProfile } from '@/types/team';
-import { User, Clock, Edit2, Briefcase, MoreHorizontal } from 'lucide-react';
+import { User, Clock, Edit2, Briefcase, MoreHorizontal, Eye, Monitor, Globe } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useEffect, useState } from 'react';
+import { db } from '@/lib/firebase/config';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import Link from 'next/link';
 
 interface TeamMemberCardProps {
   member: MemberProfile;
@@ -14,6 +18,28 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
   const canEdit = profile?.role === 'ADMIN' || profile?.role === 'MANAGER';
   const isMe = profile?.uid === member.uid;
   
+  // Track whether user is checked in via desktop app or browser
+  const [trackingSource, setTrackingSource] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!member.isOnline) { setTrackingSource(null); return; }
+    (async () => {
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'work_logs'),
+            where('userId', '==', member.uid),
+            where('status', 'in', ['active', 'break']),
+          )
+        );
+        if (!snap.empty) {
+          setTrackingSource(snap.docs[0].data().source || 'browser');
+        } else {
+          setTrackingSource(null);
+        }
+      } catch { setTrackingSource(null); }
+    })();
+  }, [member.uid, member.isOnline]);
+
   // Status Logic
   const activeNow = member.isOnline; // In a real app, calculate this based on time slots + current time
 
@@ -173,6 +199,12 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
                         <div className={`w-1.5 h-1.5 rounded-full ${activeNow ? 'bg-success animate-pulse' : 'bg-base-content/30'}`} />
                         {activeNow ? 'Online' : 'Offline'}
                     </div>
+                    {activeNow && trackingSource && (
+                        <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide border ${trackingSource === 'desktop' ? 'bg-success/10 text-success border-success/20' : 'bg-warning/10 text-warning border-warning/20'}`}>
+                            {trackingSource === 'desktop' ? <Monitor size={10} /> : <Globe size={10} />}
+                            {trackingSource === 'desktop' ? 'Desktop App' : 'Browser Only'}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -230,6 +262,18 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
 
                     {/* Action Buttons */}
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity translate-x-2 group-hover:translate-x-0 duration-300">
+                        {/* Live Tracker Link (Managers only) */}
+                        {canEdit && (
+                            <Link 
+                                href={`/web-tracker?userId=${member.uid}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="btn btn-circle btn-xs btn-ghost hover:bg-base-content/10 hover:text-info transition-colors"
+                                title="View Live Tracker"
+                            >
+                                <Eye size={14} />
+                            </Link>
+                        )}
+                        
                         {canEdit && (
                             <button 
                                 onClick={(e) => { e.stopPropagation(); onEdit(); }}

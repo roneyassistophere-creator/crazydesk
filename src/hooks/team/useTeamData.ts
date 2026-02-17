@@ -63,6 +63,8 @@ export function useTeamData() {
        });
        
        setMembers(computedMembers);
+    }, (error) => {
+      console.error('useTeamData onSnapshot error:', error);
     });
 
     return () => unsubscribe();

@@ -27,6 +27,8 @@ export default function Dashboard() {
     }
     const unsubscribeRequests = onSnapshot(q, (snapshot) => {
       setOpenRequestsCount(snapshot.size);
+    }, (error) => {
+      console.error('Dashboard fix_requests onSnapshot error:', error);
     });
 
     // Fetch Upcoming Meetings
@@ -58,6 +60,8 @@ export default function Dashboard() {
       });
 
       setUpcomingMeetings(futureMeetings.slice(0, 5));
+    }, (error) => {
+      console.error('Dashboard meetings onSnapshot error:', error);
     });
 
     return () => {

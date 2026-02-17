@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { Clock, XCircle, LogOut, RefreshCw } from 'lucide-react';
+import { Toaster } from 'react-hot-toast';
 
 const PUBLIC_ROUTES = ['/', '/login', '/signup', '/auth/login', '/auth/signup'];
 
@@ -102,6 +103,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
       <main className={`flex-1 overflow-y-auto ${showSidebar ? 'p-8' : ''} relative bg-base-100`}>
         {children}
       </main>
+      <Toaster position="top-right" />
     </div>
   );
 }

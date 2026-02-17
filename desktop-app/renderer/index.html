@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CrazyDesk Tracker</title>
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.googleapis.com https://*.firebaseio.com https://*.supabase.co https://lrdbybkovflytzygspdf.supabase.co https://firestore.googleapis.com; img-src 'self' data: blob: https://*.supabase.co https://lrdbybkovflytzygspdf.supabase.co https://*.googleusercontent.com; connect-src 'self' https://*.googleapis.com https://firestore.googleapis.com https://*.supabase.co;" />
+  <style>
+    :root {
+      --bg: #1d232a; --bg2: #242b33; --bg3: #2a323c;
+      --text: #a6adbb; --text2: #646d7a; --white: #fff;
+      --primary: #6419e6; --primary-light: #7c3aed;
+      --success: #22c55e; --success-bg: rgba(34,197,94,.12);
+      --warning: #eab308; --warning-bg: rgba(234,179,8,.12);
+      --error: #ef4444; --error-bg: rgba(239,68,68,.12);
+      --info: #3b82f6; --info-bg: rgba(59,130,246,.12);
+      --radius: 12px; --radius-sm: 8px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; display: flex; flex-direction: column;
+      -webkit-app-region: drag; user-select: none;
+    }
+    button, input, textarea, select, a { -webkit-app-region: no-drag; user-select: auto; }
+    .container { max-width: 420px; margin: 0 auto; padding: 16px; width: 100%; flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+    .title-bar { padding: 8px 16px; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text2); }
+    .card { background: var(--bg2); border: 1px solid var(--bg3); border-radius: var(--radius); padding: 16px; }
+    .card-compact { padding: 10px 14px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 10px 18px; border-radius: var(--radius-sm); border: none;
+      font-size: 14px; font-weight: 600; cursor: pointer; transition: all .15s ease; outline: none;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-success { background: var(--success); color: var(--white); }
+    .btn-success:hover:not(:disabled) { filter: brightness(1.1); }
+    .btn-warning { background: var(--warning); color: #000; }
+    .btn-warning:hover:not(:disabled) { filter: brightness(1.1); }
+    .btn-error { background: var(--error); color: var(--white); }
+    .btn-error:hover:not(:disabled) { filter: brightness(1.1); }
+    .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--bg3); }
+    .btn-ghost:hover:not(:disabled) { background: var(--bg3); }
+    .btn-primary { background: var(--primary); color: var(--white); }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .btn-block { width: 100%; }
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .input, .textarea {
+      width: 100%; padding: 10px 14px; border-radius: var(--radius-sm);
+      background: var(--bg); border: 1px solid var(--bg3); color: var(--text);
+      font-size: 14px; outline: none; transition: border .2s;
+    }
+    .input:focus, .textarea:focus { border-color: var(--primary); }
+    .textarea { min-height: 100px; resize: vertical; }
+    .label { font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 4px; display: block; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700;
+    }
+    .badge-success { background: var(--success-bg); color: var(--success); }
+    .badge-warning { background: var(--warning-bg); color: var(--warning); }
+    .badge-error { background: var(--error-bg); color: var(--error); }
+    .badge-info { background: var(--info-bg); color: var(--info); }
+    .badge-ghost { background: var(--bg3); color: var(--text2); }
+    .timer {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 36px; font-weight: 800; text-align: center;
+      padding: 12px; letter-spacing: 2px;
+    }
+    .timer-sub { font-size: 11px; color: var(--text2); text-align: center; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot-success { background: var(--success); }
+    .dot-warning { background: var(--warning); }
+    .dot-idle { background: var(--text2); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+    .pulse { animation: pulse 2s infinite; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+    .stat-val { font-size: 18px; font-weight: 800; }
+    .stat-label { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+    .log-entry { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--bg3); }
+    .log-entry:last-child { border-bottom: none; }
+    .log-thumb { width: 48px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--bg3); flex-shrink: 0; }
+    .log-thumb-placeholder { width: 48px; height: 36px; border-radius: 6px; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px;
+    }
+    .modal-box {
+      background: var(--bg2); border: 1px solid var(--bg3);
+      border-radius: var(--radius); padding: 20px; width: 100%; max-width: 380px;
+    }
+    .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; color: var(--white); }
+    .spinner { width: 20px; height: 20px; border: 2px solid var(--bg3); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+    .flex-center { display: flex; align-items: center; justify-content: center; }
+    .text-center { text-align: center; }
+    .text-sm { font-size: 12px; }
+    .text-xs { font-size: 10px; }
+    .text-muted { color: var(--text2); }
+    .fw-bold { font-weight: 700; }
+    .mb { margin-bottom: 8px; }
+    .mt { margin-top: 8px; }
+    @keyframes flash { 0% { opacity: 0; } 30% { opacity: .15; } 100% { opacity: 0; } }
+    .capture-flash { position: fixed; inset: 0; background: white; pointer-events: none; animation: flash .5s ease-out; z-index: 999; }
+    .toast {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      padding: 10px 20px; border-radius: var(--radius-sm);
+      font-size: 13px; font-weight: 600; color: var(--white);
+      z-index: 200; opacity: 0; transition: opacity .3s;
+    }
+    .toast.show { opacity: 1; }
+    .toast-success { background: var(--success); }
+    .toast-error { background: var(--error); }
+    .toast-info { background: var(--info); }
+    /* Waiting screen animation */
+    @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+    .float { animation: float 3s ease-in-out infinite; }
+  </style>
+</head>
+<body>
+  <div class="title-bar"><span>●</span> CrazyDesk Tracker</div>
+
+  <!-- ═══════════ WAITING SCREEN (no session) ═══════════ -->
+  <div id="waiting-screen" class="container">
+    <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:20px;">
+      <div class="float" style="font-size:64px;">🖥️</div>
+      <h1 style="font-size:20px; font-weight:800; color:var(--white);">CrazyDesk Tracker</h1>
+      <p class="text-sm text-muted text-center">Waiting for connection from your web dashboard...</p>
+      <div class="spinner"></div>
+      <p class="text-xs text-muted text-center" style="max-width:280px;">
+        Go to your CrazyDesk web app and click <strong style="color:var(--success);">Check In</strong> to connect this app automatically.
+      </p>
+    </div>
+  </div>
+
+  <!-- ═══════════ MAIN APP SCREEN ═══════════ -->
+  <div id="app-screen" class="container hidden">
+    <!-- User info -->
+    <div class="card card-compact" style="display:flex; align-items:center; gap:10px; flex-direction:row;">
+      <div class="dot dot-idle" id="status-dot"></div>
+      <div style="flex:1;">
+        <div class="fw-bold text-sm" id="user-name">User</div>
+        <div class="text-xs text-muted" id="user-email">Connected via web</div>
+      </div>
+      <span class="badge badge-info" style="font-size:10px;">🖥️ Desktop</span>
+    </div>
+
+    <!-- Timer -->
+    <div class="card text-center">
+      <div class="timer" id="timer-display">00:00:00</div>
+      <div class="timer-sub" id="timer-status">Not checked in</div>
+    </div>
+
+    <!-- Action buttons: Not checked in -->
+    <div id="actions-not-checked-in">
+      <button id="btn-checkin" class="btn btn-success btn-block" style="font-size:16px; padding:14px;">
+        ⏰ Check In
+      </button>
+    </div>
+
+    <!-- Action buttons: Checked in (working) -->
+    <div id="actions-checked-in" class="hidden">
+      <div class="btn-grid mb">
+        <button id="btn-break" class="btn btn-warning">☕ Break</button>
+        <button id="btn-checkout" class="btn btn-error">⬆️ Check Out</button>
+      </div>
+      <button id="btn-manual-capture" class="btn btn-ghost btn-block btn-sm">📸 Manual Capture</button>
+    </div>
+
+    <!-- Action buttons: On break -->
+    <div id="actions-on-break" class="hidden">
+      <div class="btn-grid mb">
+        <button id="btn-resume" class="btn btn-success">▶️ Resume</button>
+        <button id="btn-checkout-break" class="btn btn-error">⬆️ Check Out</button>
+      </div>
+    </div>
+
+    <!-- Tracker stats -->
+    <div class="card card-compact">
+      <div class="text-xs text-muted fw-bold mb">TODAY'S TRACKING</div>
+      <div class="stats">
+        <div><div class="stat-val" id="stat-captures">0</div><div class="stat-label">Captures</div></div>
+        <div><div class="stat-val" id="stat-clicks">0</div><div class="stat-label">Clicks</div></div>
+        <div><div class="stat-val" id="stat-keys">0</div><div class="stat-label">Keys</div></div>
+      </div>
+    </div>
+
+    <!-- Recent logs -->
+    <div class="card">
+      <div class="text-xs text-muted fw-bold mb">RECENT CAPTURES</div>
+      <div id="logs-list">
+        <div class="text-center text-muted text-sm" style="padding:20px;">No captures yet today</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ CHECK-OUT MODAL ═══════════ -->
+  <div id="checkout-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-title">✅ Check Out & Report</div>
+      <div class="label">What did you work on?</div>
+      <textarea id="report-text" class="textarea mb" placeholder="- Completed Task A&#10;- Fixed bug in module B"></textarea>
+      <div class="label">Proof of Work (optional link)</div>
+      <input id="proof-link" class="input mb" type="url" placeholder="https://..." />
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button id="btn-cancel-checkout" class="btn btn-ghost btn-sm">Cancel</button>
+        <button id="btn-confirm-checkout" class="btn btn-primary btn-sm">Submit & Check Out</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <div id="capture-flash" class="capture-flash hidden"></div>
+
+  <!-- ═══════════ APP LOGIC ═══════════ -->
+  <script type="module">
+    import {
+      setSession, getSession, hasSession, refreshToken,
+      getActiveSession, checkIn, startBreak, resumeWork, checkOut,
+      saveActivityLog, updateHeartbeat, emergencyCheckOut,
+    } from '../modules/firebase.mjs';
+    import { performCapture, startAllTracking, stopAllTracking } from '../modules/capture.mjs';
+
+    const $ = id => document.getElementById(id);
+    const waitingScreen = $('waiting-screen');
+    const appScreen     = $('app-screen');
+    const timerDisplay  = $('timer-display');
+    const timerStatus   = $('timer-status');
+    const statusDot     = $('status-dot');
+    const userName      = $('user-name');
+    const userEmail     = $('user-email');
+    const actionsNotIn  = $('actions-not-checked-in');
+    const actionsIn     = $('actions-checked-in');
+    const actionsBreak  = $('actions-on-break');
+    const checkoutModal = $('checkout-modal');
+    const logsList      = $('logs-list');
+    const toastEl       = $('toast');
+    const flashEl       = $('capture-flash');
+
+    // ─── State ─────────────────────────────────────────────
+    let sessionId = null;
+    let checkInTimeMs = null;
+    let isOnBreak = false;
+    let breakStartMs = null;
+    let totalBreakSec = 0;
+    let timerInterval = null;
+    let activityClicks = 0;
+
+    // ─── Sync session state to main process for emergency checkout ──
+    function syncSessionToMain() {
+      if (sessionId && hasSession()) {
+        const { token, uid } = getSession();
+        window.electronAPI?.syncSessionState({
+          token, uid, sessionId, checkInTimeMs, totalBreakSec,
+        });
+      } else {
+        window.electronAPI?.syncSessionState(null);
+      }
+    }
+    let activityKeys = 0;
+    let activityFlushInterval = null;
+    let captureCount = 0;
+    let heartbeatInterval = null;
+
+    // ─── Heartbeat — tells browser the desktop app is alive ──
+    function startHeartbeat() {
+      stopHeartbeat();
+      // Send immediately, then every 30 seconds
+      if (sessionId) updateHeartbeat(sessionId).catch(() => {});
+      heartbeatInterval = setInterval(() => {
+        if (sessionId) updateHeartbeat(sessionId).catch(() => {});
+      }, 30_000);
+    }
+    function stopHeartbeat() {
+      if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+    }
+
+    // ─── Emergency checkout on app quit ────────────────────
+    window.electronAPI?.onAppWillQuit(async () => {
+      console.log('[App] Received app-will-quit — doing emergency checkout');
+      if (sessionId && hasSession()) {
+        stopAllTracking();
+        stopActivity();
+        stopTimer();
+        stopHeartbeat();
+        await emergencyCheckOut(sessionId, checkInTimeMs, totalBreakSec);
+        sessionId = null;
+        checkInTimeMs = null;
+      }
+    });
+
+    // ─── Toast ─────────────────────────────────────────────
+    function showToast(msg, type = 'info') {
+      toastEl.textContent = msg;
+      toastEl.className = `toast toast-${type} show`;
+      setTimeout(() => toastEl.classList.remove('show'), 3000);
+    }
+
+    // ─── Timer ─────────────────────────────────────────────
+    function startTimer() { stopTimer(); timerInterval = setInterval(updateTimer, 1000); }
+    function stopTimer() { if (timerInterval) { clearInterval(timerInterval); timerInterval = null; } }
+    function updateTimer() {
+      if (!checkInTimeMs) { timerDisplay.textContent = '00:00:00'; return; }
+      const now = Date.now();
+      let curBreakSec = breakStartMs ? Math.floor((now - breakStartMs) / 1000) : 0;
+      const total = Math.floor((now - checkInTimeMs) / 1000);
+      const effective = Math.max(0, total - totalBreakSec - curBreakSec);
+      const h = String(Math.floor(effective / 3600)).padStart(2, '0');
+      const m = String(Math.floor((effective % 3600) / 60)).padStart(2, '0');
+      const s = String(effective % 60).padStart(2, '0');
+      timerDisplay.textContent = `${h}:${m}:${s}`;
+    }
+
+    // ─── UI State ──────────────────────────────────────────
+    function updateUI() {
+      if (!hasSession()) {
+        waitingScreen.classList.remove('hidden');
+        appScreen.classList.add('hidden');
+        return;
+      }
+      waitingScreen.classList.add('hidden');
+      appScreen.classList.remove('hidden');
+      const { displayName } = getSession();
+      userName.textContent = displayName || 'User';
+      userEmail.textContent = 'Connected via web dashboard';
+
+      if (!sessionId) {
+        actionsNotIn.classList.remove('hidden');
+        actionsIn.classList.add('hidden');
+        actionsBreak.classList.add('hidden');
+        statusDot.className = 'dot dot-idle';
+        timerStatus.textContent = 'Ready to check in';
+        timerDisplay.textContent = '00:00:00';
+        window.electronAPI?.updateStatus('idle');
+      } else if (isOnBreak) {
+        actionsNotIn.classList.add('hidden');
+        actionsIn.classList.add('hidden');
+        actionsBreak.classList.remove('hidden');
+        statusDot.className = 'dot dot-warning pulse';
+        timerStatus.textContent = '☕ On Break';
+        window.electronAPI?.updateStatus('break');
+      } else {
+        actionsNotIn.classList.add('hidden');
+        actionsIn.classList.remove('hidden');
+        actionsBreak.classList.add('hidden');
+        statusDot.className = 'dot dot-success pulse';
+        timerStatus.textContent = '🟢 Working — Tracker Active';
+        window.electronAPI?.updateStatus('active');
+      }
+    }
+
+    function flashScreen() {
+      flashEl.classList.remove('hidden');
+      setTimeout(() => flashEl.classList.add('hidden'), 600);
+    }
+
+    // ─── Deep link handler ─────────────────────────────────
+    window.electronAPI?.onDeepLink(async ({ action, params }) => {
+      console.log('[DeepLink] Received! action:', action, 'params:', Object.keys(params));
+      console.log('[DeepLink] token length:', params.token?.length || 0, 'uid:', params.uid);
+
+      if (action === 'checkin' && params.token && params.uid) {
+        // Set up the session
+        const name = params.name || 'User';
+        console.log('[DeepLink] Setting session for:', name);
+        setSession(params.token, params.uid, name);
+        updateUI();
+        showToast('Connected!', 'success');
+        window.electronAPI?.notify('CrazyDesk', 'Connected to your web session');
+
+        // Check for existing active session
+        try {
+          const existing = await getActiveSession();
+          if (existing) {
+            sessionId = existing._id;
+            checkInTimeMs = existing.checkInTime instanceof Date
+              ? existing.checkInTime.getTime()
+              : new Date(existing.checkInTime).getTime();
+            isOnBreak = existing.status === 'break';
+            totalBreakSec = 0;
+            if (existing.breaks) {
+              for (const b of existing.breaks) {
+                if (b.endTime) {
+                  const s = b.startTime instanceof Date ? b.startTime.getTime() : new Date(b.startTime).getTime();
+                  const e = b.endTime instanceof Date ? b.endTime.getTime() : new Date(b.endTime).getTime();
+                  totalBreakSec += Math.floor((e - s) / 1000);
+                }
+              }
+            }
+            if (isOnBreak && existing.breaks?.length) {
+              const last = existing.breaks[existing.breaks.length - 1];
+              if (!last.endTime) {
+                breakStartMs = last.startTime instanceof Date ? last.startTime.getTime() : new Date(last.startTime).getTime();
+              }
+            }
+            startTimer();
+            startTracking();
+            updateUI();
+            syncSessionToMain();
+            showToast('Resumed active session', 'info');
+            return;
+          }
+        } catch (e) {
+          console.warn('Restore session:', e);
+        }
+
+        // Auto check-in
+        try {
+          sessionId = await checkIn();
+          checkInTimeMs = Date.now();
+          isOnBreak = false;
+          totalBreakSec = 0;
+          breakStartMs = null;
+          startTimer();
+          startTracking();
+          updateUI();
+          syncSessionToMain();
+          showToast('Checked in!', 'success');
+          window.electronAPI?.notify('CrazyDesk', 'Checked in — tracking started');
+        } catch (e) {
+          showToast('Check-in failed: ' + e.message, 'error');
+        }
+      }
+
+      if (action === 'refresh' && params.token) {
+        refreshToken(params.token);
+        syncSessionToMain(); // Keep main process token up to date
+        console.log('[Token] Refreshed');
+      }
+
+      if (action === 'capture') {
+        // Remote capture command from web
+        flashScreen();
+        const result = await performCapture('remote');
+        captureCount++;
+        $('stat-captures').textContent = captureCount;
+        showToast(result.flagged ? 'Capture failed' : 'Remote capture saved', result.flagged ? 'error' : 'info');
+      }
+    });
+
+    // ─── Manual check-in (if user opens app directly, then web connects later) ──
+    $('btn-checkin').onclick = async () => {
+      if (!hasSession()) {
+        showToast('Please check in from the web dashboard first', 'error');
+        return;
+      }
+      $('btn-checkin').disabled = true;
+      try {
+        sessionId = await checkIn();
+        checkInTimeMs = Date.now();
+        isOnBreak = false;
+        totalBreakSec = 0;
+        breakStartMs = null;
+        startTimer();
+        startTracking();
+        updateUI();
+        syncSessionToMain();
+        showToast('Checked in!', 'success');
+        window.electronAPI?.notify('CrazyDesk', 'Checked in — tracking started');
+      } catch (e) {
+        showToast('Check-in failed: ' + e.message, 'error');
+      } finally { $('btn-checkin').disabled = false; }
+    };
+
+    // ─── Break ─────────────────────────────────────────────
+    $('btn-break').onclick = async () => {
+      if (!sessionId) return;
+      try {
+        await startBreak(sessionId);
+        isOnBreak = true;
+        breakStartMs = Date.now();
+        updateUI();
+        showToast('Break started — enjoy!', 'info');
+      } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    };
+
+    $('btn-resume').onclick = async () => {
+      if (!sessionId) return;
+      try {
+        await resumeWork(sessionId);
+        if (breakStartMs) totalBreakSec += Math.floor((Date.now() - breakStartMs) / 1000);
+        isOnBreak = false;
+        breakStartMs = null;
+        updateUI();
+        showToast('Welcome back!', 'success');
+      } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    };
+
+    // ─── Check Out ─────────────────────────────────────────
+    $('btn-checkout').onclick = () => checkoutModal.classList.remove('hidden');
+    $('btn-checkout-break').onclick = () => checkoutModal.classList.remove('hidden');
+    $('btn-cancel-checkout').onclick = () => checkoutModal.classList.add('hidden');
+
+    $('btn-confirm-checkout').onclick = async () => {
+      const report = $('report-text').value.trim();
+      if (!report) { showToast('Please write a summary', 'error'); return; }
+      $('btn-confirm-checkout').disabled = true;
+      try {
+        const proof = $('proof-link').value.trim();
+        await checkOut(sessionId, checkInTimeMs, report, proof, totalBreakSec);
+        stopAllTracking();
+        stopActivity();
+        stopTimer();
+        stopHeartbeat();
+        sessionId = null; checkInTimeMs = null; isOnBreak = false; breakStartMs = null; totalBreakSec = 0;
+        syncSessionToMain();
+        checkoutModal.classList.add('hidden');
+        $('report-text').value = '';
+        $('proof-link').value = '';
+        updateUI();
+        showToast('Checked out!', 'success');
+        window.electronAPI?.notify('CrazyDesk', 'Checked out — session complete');
+      } catch (e) {
+        showToast('Check-out failed: ' + e.message, 'error');
+      } finally { $('btn-confirm-checkout').disabled = false; }
+    };
+
+    // ─── Manual Capture ────────────────────────────────────
+    $('btn-manual-capture').onclick = async () => {
+      $('btn-manual-capture').disabled = true;
+      flashScreen();
+      try {
+        const result = await performCapture('manual');
+        captureCount++;
+        $('stat-captures').textContent = captureCount;
+        showToast(result.flagged ? 'Capture failed — flagged' : 'Captured!', result.flagged ? 'error' : 'success');
+      } catch (e) { showToast('Capture error', 'error'); }
+      finally { $('btn-manual-capture').disabled = false; }
+    };
+
+    // ─── Start tracking ────────────────────────────────────
+    function startTracking() {
+      startAllTracking((result) => {
+        flashScreen();
+        captureCount++;
+        $('stat-captures').textContent = captureCount;
+        if (!result.flagged) showToast('Auto-capture saved', 'info');
+      });
+      startActivity();
+      startHeartbeat();
+    }
+
+    // ─── Activity tracking ─────────────────────────────────
+    function startActivity() {
+      stopActivity();
+      activityClicks = 0; activityKeys = 0;
+      window.addEventListener('click', onActivityClick);
+      window.addEventListener('keydown', onActivityKey);
+      activityFlushInterval = setInterval(flushActivity, 5 * 60_000);
+      setInterval(() => {
+        $('stat-clicks').textContent = activityClicks;
+        $('stat-keys').textContent = activityKeys;
+      }, 10_000);
+    }
+    function stopActivity() {
+      window.removeEventListener('click', onActivityClick);
+      window.removeEventListener('keydown', onActivityKey);
+      if (activityFlushInterval) clearInterval(activityFlushInterval);
+    }
+    function onActivityClick() { activityClicks++; }
+    function onActivityKey() { activityKeys++; }
+    async function flushActivity() {
+      if (!activityClicks && !activityKeys) return;
+      const { uid, displayName } = getSession();
+      try {
+        await saveActivityLog({
+          userId: uid,
+          userDisplayName: displayName,
+          mouseClicks: activityClicks,
+          keystrokes: activityKeys,
+          lastActive: new Date().toISOString(),
+        });
+        activityClicks = 0; activityKeys = 0;
+      } catch (e) { console.error('Activity flush:', e); }
+    }
+
+    // ─── Initial UI ────────────────────────────────────────
+    updateUI();
+  </script>
+</body>
+</html>

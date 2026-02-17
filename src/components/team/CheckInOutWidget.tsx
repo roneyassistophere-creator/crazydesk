@@ -1,665 +1,893 @@
-import { useState, useEffect } from 'react';
+'use client';
+
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase/config';
-import { collection, addDoc, updateDoc, doc, serverTimestamp, getDocs, query, where, orderBy, limit, arrayUnion, Timestamp } from 'firebase/firestore';
+import {
+  collection, addDoc, updateDoc, doc, serverTimestamp,
+  getDocs, query, where, arrayUnion,
+  Timestamp, onSnapshot, getDoc,
+} from 'firebase/firestore';
+import { auth } from '@/lib/firebase/config';
 import { toast } from 'react-hot-toast';
-import { Clock, Download, CheckCircle, XCircle, Link as LinkIcon, Coffee, Play } from 'lucide-react';
-import { WorkLog } from '@/types/workLog';
-
-import { MemberProfile } from '@/types/team';
+import {
+  Clock, Download, CheckCircle, XCircle,
+  Link as LinkIcon, Coffee, Play, Monitor, Globe,
+  ExternalLink, RefreshCw, AlertTriangle,
+} from 'lucide-react';
 
 interface CheckInOutWidgetProps {
-    onStatusChange?: (isOnline: boolean) => void;
-    compact?: boolean;
+  onStatusChange?: (isOnline: boolean) => void;
+  compact?: boolean;
 }
 
-export default function CheckInOutWidget({ onStatusChange, compact = false }: CheckInOutWidgetProps) {
-    const { user, profile } = useAuth();
-    const [isCheckedIn, setIsCheckedIn] = useState(false);
-    const [isOnBreak, setIsOnBreak] = useState(false);
-    const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-    const [checkInTime, setCheckInTime] = useState<Date | null>(null);
-    const [breakStartTime, setBreakStartTime] = useState<Date | null>(null);
-    const [elapsedTime, setElapsedTime] = useState(0);
-    const [showReportModal, setShowReportModal] = useState(false);
-    const [reportText, setReportText] = useState('');
-    const [proofLink, setProofLink] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [totalBreakSeconds, setTotalBreakSeconds] = useState(0);
-    const [actionTimerText, setActionTimerText] = useState('');
+export default function CheckInOutWidget({
+  onStatusChange,
+  compact = false,
+}: CheckInOutWidgetProps) {
+  const { user, profile } = useAuth();
 
-    // Schedule Timer
-    useEffect(() => {
-        const memberProfile = profile as unknown as MemberProfile;
-        if (!memberProfile?.availableSlots || memberProfile.availableSlots.length === 0) {
-            setActionTimerText('');
-            return;
-        }
+  // Core state
+  const [isCheckedIn, setIsCheckedIn] = useState(false);
+  const [isOnBreak, setIsOnBreak] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionSource, setSessionSource] = useState<'browser' | 'desktop' | null>(null);
+  const [checkInTime, setCheckInTime] = useState<Date | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [totalBreakSeconds, setTotalBreakSeconds] = useState(0);
 
-        const updateTimer = () => {
-             const now = new Date();
-             const currentDayIndex = now.getDay(); 
-             const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-             const currentDayName = days[currentDayIndex];
-             const currentMins = now.getHours() * 60 + now.getMinutes();
+  // UI state
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportText, setReportText] = useState('');
+  const [proofLink, setProofLink] = useState('');
+  const [loading, setLoading] = useState(false);
 
-             // Helper to parse "HH:MM"
-             const parseTime = (t: string) => {
-                 const [h, m] = t.split(':').map(Number);
-                 return h * 60 + m;
-             };
+  // Modal flow: step 0 = hidden, step 1 = choose method, step 2 = open app prompt
+  const [modalStep, setModalStep] = useState<0 | 1 | 2>(0);
+  const [waitingForDesktop, setWaitingForDesktop] = useState(false);
+  const [isStaleDesktop, setIsStaleDesktop] = useState(false);
 
-             // 1. Check if currently inside a slot
-             // Use explicit cast for filtering
-             const slots = memberProfile.availableSlots || [];
-             const currentSlot = slots.find((slot: any) => {
-                if (slot.day !== currentDayName) return false;
-                const start = parseTime(slot.startTime);
-                const end = parseTime(slot.endTime);
-                return currentMins >= start && currentMins < end;
-             });
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tokenRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const staleCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastHeartbeatRef = useRef<Date | null>(null);
 
-             if (isCheckedIn) {
-                 // TARGET: Check Out Time (End of current slot)
-                 if (currentSlot) {
-                     const end = parseTime(currentSlot.endTime);
-                     const diff = end - currentMins;
-                     if (diff > 0) {
-                         const h = Math.floor(diff / 60);
-                         const m = diff % 60;
-                         setActionTimerText(`(in ${h}h ${m}m)`);
-                     } else {
-                         setActionTimerText('(Overtime)');
-                     }
-                 } else {
-                     // Not in a slot but checked in -> Overtime
-                     setActionTimerText('(Overtime)');
-                 }
-             } else {
-                 // TARGET: Check In Time (Start of next slot)
-                 
-                 // If current slot exists, we are LATE or working?
-                 if (currentSlot) {
-                     const end = parseTime(currentSlot.endTime);
-                     const diff = end - currentMins;
-                     const h = Math.floor(diff / 60);
-                     const m = diff % 60;
-                     setActionTimerText(`(Shift ends in ${h}h ${m}m)`);
-                 } else {
-                     // Find next future slot
-                     let minDiff = Infinity;
-                     
-                     slots.forEach((slot: any) => {
-                        const slotDayIndex = days.indexOf(slot.day);
-                        const start = parseTime(slot.startTime);
-                        
-                        let dayDiff = slotDayIndex - currentDayIndex;
-                        if (dayDiff < 0) dayDiff += 7; // Next week
-                         
-                        // If same day but time passed, move to next week
-                        let diffMins = (dayDiff * 24 * 60) + (start - currentMins);
-                        
-                        if (diffMins <= 0) {
-                             diffMins += 7 * 24 * 60;
-                        }
+  // Format seconds to HH:MM:SS
+  const fmt = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+  };
 
-                        if (diffMins < minDiff) {
-                            minDiff = diffMins;
-                        }
-                     });
+  // Real-time Firestore listener - keeps web in sync with active session
+  useEffect(() => {
+    if (!user) return;
 
-                     if (minDiff !== Infinity) {
-                         const daysUntil = Math.floor(minDiff / (24 * 60));
-                         const h = Math.floor((minDiff % (24 * 60)) / 60);
-                         const m = minDiff % 60;
-                         
-                         if (daysUntil > 0) {
-                             setActionTimerText(`(in ${daysUntil}d ${h}h)`);
-                         } else {
-                             setActionTimerText(`(in ${h}h ${m}m)`);
-                         }
-                     } else {
-                         setActionTimerText('');
-                     }
-                 }
-             }
-        };
+    // Query by userId only — filter status client-side.
+    // Using only a single where() avoids composite index requirements.
+    // This ensures onSnapshot fires when desktop app changes status to 'completed'
+    // via REST API — the doc is still in the result set, we just see its new status.
+    const q = query(
+      collection(db, 'work_logs'),
+      where('userId', '==', user.uid),
+    );
 
-        updateTimer();
-        const interval = setInterval(updateTimer, 60000);
-        return () => clearInterval(interval);
+    const unsub = onSnapshot(q, (snap) => {
+      // Filter for active/break sessions client-side
+      const activeDocs = snap.docs.filter((d) => {
+        const s = d.data().status;
+        return s === 'active' || s === 'break';
+      });
 
-    }, [profile, isCheckedIn]);
+      if (activeDocs.length === 0) {
+        setIsCheckedIn(false);
+        setIsOnBreak(false);
+        setCurrentSessionId(null);
+        setSessionSource(null);
+        setCheckInTime(null);
+        setElapsedTime(0);
+        setTotalBreakSeconds(0);
+        setWaitingForDesktop(false);
+        setIsStaleDesktop(false);
+        lastHeartbeatRef.current = null;
+        onStatusChange?.(false);
+        return;
+      }
 
-    // Initial check for active session
-    useEffect(() => {
-        if (!user) return;
+      // Pick the most recent session (sort client-side)
+      const sorted = activeDocs
+        .map((d) => ({ id: d.id, data: d.data() }))
+        .sort((a, b) => {
+          const ta = a.data.checkInTime?.toDate?.()?.getTime() ?? 0;
+          const tb = b.data.checkInTime?.toDate?.()?.getTime() ?? 0;
+          return tb - ta;
+        });
 
-        const checkActiveSession = async () => {
-            try {
-                // Check if user has an active session
-                const logsRef = collection(db, 'work_logs');
-                const q = query(
-                    logsRef, 
-                    where('userId', '==', user.uid), 
-                    where('status', 'in', ['active', 'break']),
-                    limit(1)
-                );
-                const snapshot = await getDocs(q);
-                
-                if (!snapshot.empty) {
-                    const activeLog = snapshot.docs[0].data() as WorkLog;
-                    const logId = snapshot.docs[0].id;
-                    
-                    setIsCheckedIn(true);
-                    setCurrentSessionId(logId);
-                    
-                    // Set status
-                    const isBreak = activeLog.status === 'break';
-                    setIsOnBreak(isBreak);
+      const docSnap = sorted[0];
+      const data = docSnap.data;
 
-                    // Times and Durations
-                    const startTime = activeLog.checkInTime.toDate();
-                    setCheckInTime(startTime);
+      setIsCheckedIn(true);
+      setCurrentSessionId(docSnap.id);
+      const source = (data.source || 'browser') as 'browser' | 'desktop';
+      setSessionSource(source);
+      setWaitingForDesktop(false);
+      setModalStep(0);
+      onStatusChange?.(true);
 
-                    // Calculate total break time from completed breaks
-                    let historicalBreakSeconds = 0;
-                    if (activeLog.breaks) {
-                         historicalBreakSeconds = activeLog.breaks.reduce((acc, b) => {
-                             if (b.endTime && b.startTime) {
-                                 const start = b.startTime.toDate().getTime();
-                                 const end = b.endTime.toDate().getTime();
-                                 return acc + Math.floor((end - start) / 1000);
-                             }
-                             return acc;
-                         }, 0);
-                    }
-                    setTotalBreakSeconds(historicalBreakSeconds);
+      const ciTime = data.checkInTime?.toDate?.() ?? new Date();
+      setCheckInTime(ciTime);
 
-                    // If currently on break, set break start time
-                    if (isBreak && activeLog.breaks && activeLog.breaks.length > 0) {
-                        const lastBreak = activeLog.breaks[activeLog.breaks.length - 1];
-                        if (!lastBreak.endTime) {
-                            setBreakStartTime(lastBreak.startTime.toDate());
-                        }
-                    }
-
-                } else {
-                    setIsCheckedIn(false);
-                    setIsOnBreak(false);
-                }
-            } catch (error) {
-                console.error("Error checking active session:", error);
-            }
-        };
-
-        checkActiveSession();
-    }, [user]);
-
-    // Timer effect
-    useEffect(() => {
-        let interval: NodeJS.Timeout;
-        if (isCheckedIn && checkInTime) {
-            interval = setInterval(() => {
-                const now = new Date();
-                
-                // If on break, we don't increment the "elapsed WORK time" relative to now
-                // Instead, we show break time ticking? Or just pause work timer?
-                // User asked: "taking a break counts altogether just in the report log it shows the break time if taken"
-                // Usually check-in timer shows "Time since check-in minus break time".
-                
-                // Calculate current break duration if active
-                let currentBreakSeconds = 0;
-                if (breakStartTime) {
-                    currentBreakSeconds = Math.floor((now.getTime() - breakStartTime.getTime()) / 1000);
-                }
-
-                // Total elapsed since checkin
-                const totalElapsed = Math.floor((now.getTime() - checkInTime.getTime()) / 1000);
-                
-                // Effective work time = Total elapsed - (Historical Breaks + Current Break)
-                const effectiveWorkValues = totalElapsed - (totalBreakSeconds + currentBreakSeconds);
-                
-                setElapsedTime(effectiveWorkValues > 0 ? effectiveWorkValues : 0);
-
-            }, 1000);
+      // Track heartbeat for desktop sessions
+      if (source === 'desktop') {
+        const hb = data.lastHeartbeat?.toDate?.() ?? null;
+        lastHeartbeatRef.current = hb;
+        // Check if stale (no heartbeat for > 2 minutes)
+        if (hb) {
+          const ageMs = Date.now() - hb.getTime();
+          setIsStaleDesktop(ageMs > 2 * 60 * 1000);
         } else {
-            setElapsedTime(0);
+          // No heartbeat field at all — check if session is older than 2min
+          const sessionAge = Date.now() - ciTime.getTime();
+          setIsStaleDesktop(sessionAge > 2 * 60 * 1000);
         }
-        return () => clearInterval(interval);
-    }, [isCheckedIn, checkInTime, isOnBreak, breakStartTime, totalBreakSeconds]);
+      } else {
+        setIsStaleDesktop(false);
+        lastHeartbeatRef.current = null;
+      }
 
-    const formatDuration = (seconds: number) => {
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = seconds % 60;
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    };
+      const breaks: Array<{ startTime: any; endTime?: any }> = data.breaks || [];
+      const onBreak = data.status === 'break';
+      setIsOnBreak(onBreak);
 
-    const handleCheckIn = async () => {
-        if (!user) return;
-        setLoading(true);
-        try {
-            const newLog = {
-                userId: user.uid,
-                userDisplayName: profile?.displayName || user.email || 'User',
-                checkInTime: serverTimestamp(),
-                status: 'active' as const,
-                breaks: []
-            };
-
-            const docRef = await addDoc(collection(db, 'work_logs'), newLog);
-            
-            await updateDoc(doc(db, 'member_profiles', user.uid), {
-                isOnline: true,
-                lastActive: serverTimestamp()
-            });
-
-            setIsCheckedIn(true);
-            setIsOnBreak(false);
-            setCurrentSessionId(docRef.id);
-            setCheckInTime(new Date());
-            setTotalBreakSeconds(0);
-            toast.success("Checked in successfully!");
-            onStatusChange?.(true);
-
-        } catch (error) {
-            console.error("Check-in failed:", error);
-            toast.error("Failed to check in");
-        } finally {
-            setLoading(false);
+      let totalBrk = 0;
+      for (const b of breaks) {
+        if (b.endTime) {
+          const s = b.startTime?.toDate?.()?.getTime() ?? 0;
+          const e = b.endTime?.toDate?.()?.getTime() ?? 0;
+          totalBrk += Math.max(0, (e - s) / 1000);
         }
-    };
+      }
+      setTotalBreakSeconds(Math.floor(totalBrk));
+    }, (error) => {
+      console.error('CheckInOutWidget onSnapshot error:', error);
+    });
 
-    const handleTakeBreak = async () => {
-        if (!user || !currentSessionId) return;
-        setLoading(true);
-        try {
-            // Append a new break entry with startTime
-            const breakStart = new Date();
-            const newBreak = { startTime: Timestamp.fromDate(breakStart) };
-            
-            await updateDoc(doc(db, 'work_logs', currentSessionId), {
-                status: 'break',
-                breaks: arrayUnion(newBreak)
-            });
-            
-            setIsOnBreak(true);
-            setBreakStartTime(breakStart);
-            toast.success("Break started. Enjoy your coffee!");
+    return () => unsub();
+  }, [user, onStatusChange]);
 
-        } catch (error) {
-            console.error("Break start failed:", error);
-            toast.error("Failed to start break");
-        } finally {
-            setLoading(false);
+  // Periodic stale desktop session check (every 30s)
+  useEffect(() => {
+    if (staleCheckRef.current) clearInterval(staleCheckRef.current);
+
+    if (isCheckedIn && sessionSource === 'desktop') {
+      staleCheckRef.current = setInterval(() => {
+        const hb = lastHeartbeatRef.current;
+        if (hb) {
+          const ageMs = Date.now() - hb.getTime();
+          setIsStaleDesktop(ageMs > 2 * 60 * 1000);
         }
-    };
-
-    const handleResumeWork = async () => {
-        if (!user || !currentSessionId || !breakStartTime) return;
-        setLoading(true);
-        try {
-            const resumeTime = new Date();
-            
-            // We need to update the LAST break entry (the open one)
-            // Firestore arrayUnion adds unique elements, we can't easily update a specific index without reading first.
-            // Since we rely on local state for UX, reading again is safest for data integrity.
-            
-            const logRef = doc(db, 'work_logs', currentSessionId);
-            const logSnap = await getDocs(query(collection(db, 'work_logs'), where('__name__', '==', currentSessionId))); // Get explicit doc
-            // Actually getDoc is better but I'm in a hurry with imports? No I have getDocs. 
-            // Let's use getDocs with ID query or just rely on array manipulation strategy.
-            // Strategy: Read current breaks, update last one, write back entire array.
-            
-            // Re-fetch to be safe
-            // Wait, I can use the same pattern as before? No.
-            // Let's just fetch the doc data.
-            // I need to import getDoc. I have getDocs. I'll use getDocs with generic query or ref.
-            // Actually, I can just use arrayRemove / arrayUnion if I knew the exact object, but I don't know the server timestamp.
-            // BETTER: Read the document, modify array, write back.
-            // But I don't have GetDoc imported? I see getDocs.
-            // I'll add getDoc to imports if not there? 
-            // Looking at previous imports: `getDocs`. 
-            // I will use `runTransaction` or just fetch.
-            
-            // Quick fetch using existing imports
-            const q = query(collection(db, 'work_logs'), where('__name__', '==', currentSessionId));
-            const snap = await getDocs(q);
-            if (snap.empty) throw new Error("Session not found");
-            
-            const data = snap.docs[0].data() as WorkLog;
-            const breaks = data.breaks || [];
-            
-            if (breaks.length > 0) {
-                const lastBreak = breaks[breaks.length - 1];
-                if (!lastBreak.endTime) {
-                    // Update the local object
-                    lastBreak.endTime = Timestamp.fromDate(resumeTime);
-                    // Calculate duration
-                    const diffMinutes = Math.round((resumeTime.getTime() - breakStartTime.getTime()) / 60000);
-                    lastBreak.durationMinutes = diffMinutes;
-                }
-            }
-
-            // Write back complete array
-            await updateDoc(logRef, {
-                status: 'active',
-                breaks: breaks
-            });
-
-            // Update local state
-            const breakDurationSeconds = Math.floor((resumeTime.getTime() - breakStartTime.getTime()) / 1000);
-            setTotalBreakSeconds(prev => prev + breakDurationSeconds);
-            
-            setIsOnBreak(false);
-            setBreakStartTime(null);
-            toast.success("Welcome back!");
-
-        } catch (error) {
-            console.error("Resume failed:", error);
-            toast.error("Failed to resume work");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleCheckOutClick = () => {
-        // If on break, allow checkout but warn? Or auto-resume?
-        // Let's auto-end the break if currently on break.
-        setShowReportModal(true);
-    };
-
-    const confirmCheckOut = async () => {
-        if (!user || !currentSessionId) return;
-        setLoading(true);
-        try {
-            const checkOutTime = new Date();
-            let finalBreaks: any[] = [];
-            let addedBreakSeconds = 0;
-
-            // Prepare final data logic
-            // If on break, we need to close the break first
-            if (isOnBreak && breakStartTime) {
-                 // Fetch latest to get array
-                 const q = query(collection(db, 'work_logs'), where('__name__', '==', currentSessionId));
-                 const snap = await getDocs(q);
-                 if (!snap.empty) {
-                     const data = snap.docs[0].data() as WorkLog;
-                     finalBreaks = data.breaks || [];
-                     if (finalBreaks.length > 0) {
-                        const lastBreak = finalBreaks[finalBreaks.length - 1];
-                        if (!lastBreak.endTime) {
-                            lastBreak.endTime = Timestamp.fromDate(checkOutTime);
-                            lastBreak.durationMinutes = Math.round((checkOutTime.getTime() - breakStartTime.getTime()) / 60000);
-                            addedBreakSeconds = Math.floor((checkOutTime.getTime() - breakStartTime.getTime()) / 1000);
-                        }
-                     }
-                 }
-            }
-
-            // Calculate totals
-            const totalDurationRaw = checkInTime ? Math.round((checkOutTime.getTime() - checkInTime.getTime()) / 60000) : 0;
-            const totalBreakMin = Math.round((totalBreakSeconds + addedBreakSeconds) / 60);
-            const netDuration = totalDurationRaw - totalBreakMin;
-
-            const updateData: any = {
-                checkOutTime: serverTimestamp(),
-                report: reportText,
-                attachments: proofLink ? [proofLink] : [],
-                durationMinutes: netDuration > 0 ? netDuration : 0,
-                breakDurationMinutes: totalBreakMin,
-                status: 'completed'
-            };
-
-            if (isOnBreak) {
-                updateData.breaks = finalBreaks;
-            }
-
-            await updateDoc(doc(db, 'work_logs', currentSessionId), updateData);
-            await updateDoc(doc(db, 'member_profiles', user.uid), {
-                isOnline: false,
-                lastActive: serverTimestamp()
-            });
-
-            setIsCheckedIn(false);
-            setIsOnBreak(false);
-            setCurrentSessionId(null);
-            setCheckInTime(null);
-            setReportText('');
-            setProofLink('');
-            setShowReportModal(false);
-            setTotalBreakSeconds(0);
-            toast.success("Checked out successfully!");
-            onStatusChange?.(false);
-
-        } catch (error) {
-            console.error("Check-out failed:", error);
-            toast.error("Failed to check out");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    if (compact) {
-        return (
-            <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 px-3 py-1 bg-base-200 rounded-full font-mono text-xs font-bold border border-base-300">
-                    <div className={`w-2 h-2 rounded-full ${isCheckedIn ? (isOnBreak ? 'bg-warning' : 'bg-success animate-pulse') : 'bg-base-content/20'}`}></div>
-                    <span className={isOnBreak ? 'opacity-50' : ''}>{formatDuration(elapsedTime)}</span>
-                </div>
-    
-                {!isCheckedIn ? (
-                    <button 
-                        onClick={handleCheckIn} 
-                        disabled={loading}
-                        className="btn btn-success btn-sm gap-2 shadow-sm font-bold"
-                    >
-                        <Clock size={14} />
-                        {loading ? 'Checking in...' : `Check In`}
-                    </button>
-                ) : (
-                    <div className="flex items-center gap-2">
-                        {!isOnBreak ? (
-                            <button 
-                                onClick={handleTakeBreak}
-                                disabled={loading}
-                                className="btn btn-warning btn-outline btn-sm gap-2 font-bold"
-                                title="Tak work timer)"
-                            >
-                                <Coffee size={14} />
-                                <span className="hidden sm:inline">Break</span>
-                            </button>
-                        ) : (
-                            <button 
-                                onClick={handleResumeWork}
-                                disabled={loading}
-                                className="btn btn-success btn-outline btn-sm gap-2 font-bold"
-                                title="Resume work"
-                            >
-                                <Play size={14} />
-                                <span className="hidden sm:inline">Resume</span>
-                            </button>
-                        )}
-                        
-                        <button 
-                            onClick={handleCheckOutClick}
-                            disabled={loading} 
-                            className="btn btn-error btn-outline btn-sm gap-2 font-bold"
-                            title={actionTimerText}
-                        >
-                            <Download size={14} className="rotate-180" />
-                            <span className="truncate hidden sm:inline">Check Out</span>
-                        </button>
-                    </div>
-                )}
-                 {/* Check Out Modal */}
-            {showReportModal && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in zoom-in duration-200">
-                    <div className="bg-base-100 rounded-2xl shadow-2xl p-6 w-full max-w-md border border-base-200">
-                        <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                           <CheckCircle className="text-success" size={24}/> Check Out & Report
-                        </h3>
-                        
-                        <div className="form-control mb-4">
-                            <label className="label">
-                                <span className="label-text font-medium">Session Summary</span>
-                                <span className="label-text-alt opacity-60">What did you achieve?</span>
-                            </label>
-                            <textarea 
-                                className="textarea textarea-bordered h-32 focus:border-primary" 
-                                placeholder="- Completed Task A&#10;- Fixed bug in module B&#10;- Reviewed PRs"
-                                value={reportText}
-                                onChange={(e) => setReportText(e.target.value)}
-                            ></textarea>
-                        </div>
-                        
-                        {/* Optional: Attachment UI can go here later */}
-                        <div className="form-control mb-6">
-                            <label className="label cursor-pointer justify-start gap-4">
-                                <LinkIcon size={16} />
-                                <span className="label-text font-medium">Proof of Work (Link)</span>
-                            </label>
-                            <input 
-                                type="url"
-                                className="input input-bordered w-full focus:border-primary"
-                                placeholder="https://..."
-                                value={proofLink}
-                                onChange={(e) => setProofLink(e.target.value)}
-                            />
-                        </div>
-
-                        <div className="flex justify-end gap-3">
-                            <button 
-                                className="btn btn-ghost"
-                                onClick={() => setShowReportModal(false)}
-                                disabled={loading}
-                            >
-                                Cancel
-                            </button>
-                            <button 
-                                className="btn btn-primary"
-                                onClick={confirmCheckOut}
-                                disabled={loading || !reportText.trim()}
-                            >
-                                {loading ? <span className="loading loading-spinner"></span> : 'Check Out'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            </div>
-        );
+      }, 30_000);
     }
 
-    return (
-        <div className="flex flex-col items-center gap-4 w-full">
-            <div className={`flex items-center justify-center gap-3 px-6 py-2 bg-base-200/50 rounded-xl font-mono text-xl font-bold border border-base-300 w-full ${!isCheckedIn ? 'opacity-50 grayscale' : ''}`}>
-                <div className={`w-3 h-3 rounded-full ${isCheckedIn ? (isOnBreak ? 'bg-warning' : 'bg-success animate-pulse') : 'bg-base-content/20'}`}></div>
-                <span className={isOnBreak ? 'opacity-50' : ''}>{formatDuration(elapsedTime)}</span>
-                {isOnBreak && <span className="badge badge-warning badge-sm font-bold uppercase ml-2">Break</span>}
+    return () => {
+      if (staleCheckRef.current) clearInterval(staleCheckRef.current);
+    };
+  }, [isCheckedIn, sessionSource]);
+
+  // Timer tick
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+
+    if (isCheckedIn && checkInTime) {
+      const tick = () => {
+        const now = Date.now();
+        const total = Math.floor((now - checkInTime.getTime()) / 1000);
+        setElapsedTime(Math.max(0, total));
+      };
+      tick();
+      timerRef.current = setInterval(tick, 1000);
+    } else {
+      setElapsedTime(0);
+    }
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isCheckedIn, checkInTime]);
+
+  // Clean up token refresh on unmount or when session ends
+  useEffect(() => {
+    if (!isCheckedIn && tokenRefreshRef.current) {
+      clearInterval(tokenRefreshRef.current);
+      tokenRefreshRef.current = null;
+    }
+    return () => {
+      if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
+    };
+  }, [isCheckedIn]);
+
+  // Helper: open deep link without navigating away from current page
+  const openDeepLink = useCallback((url: string) => {
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    setTimeout(() => iframe.remove(), 2000);
+  }, []);
+
+  // CHECK-IN: Show step 1 modal
+  const handleCheckIn = useCallback(() => {
+    if (!user || loading || isCheckedIn) return;
+    setModalStep(1);
+  }, [user, loading, isCheckedIn]);
+
+  // BROWSER CHECK-IN: Instant, optimistic
+  const handleBrowserCheckIn = useCallback(async () => {
+    if (!user) return;
+    setModalStep(0);
+    setLoading(true);
+
+    // Optimistic: set local state immediately so timer starts
+    const now = new Date();
+    setIsCheckedIn(true);
+    setCheckInTime(now);
+    setSessionSource('browser');
+    setIsOnBreak(false);
+    setTotalBreakSeconds(0);
+
+    try {
+      const docRef = await addDoc(collection(db, 'work_logs'), {
+        userId: user.uid,
+        userDisplayName: user.displayName || profile?.displayName || 'Unknown',
+        checkInTime: serverTimestamp(),
+        status: 'active',
+        source: 'browser',
+        breaks: [],
+      });
+      setCurrentSessionId(docRef.id);
+      toast.success('Checked in!');
+    } catch (err: any) {
+      console.error('Browser check-in error:', err);
+      // Roll back optimistic state
+      setIsCheckedIn(false);
+      setCheckInTime(null);
+      setSessionSource(null);
+      toast.error('Failed to check in');
+    } finally {
+      setLoading(false);
+    }
+  }, [user, profile]);
+
+  // DESKTOP CHECK-IN: Show step 2 modal
+  const handleDesktopCheckIn = useCallback(() => {
+    setModalStep(2);
+  }, []);
+
+  // Actually send the deep link to desktop app
+  const handleOpenDesktopApp = useCallback(async () => {
+    if (!user) return;
+    setModalStep(0);
+    setLoading(true);
+    setWaitingForDesktop(true);
+
+    try {
+      const token = await auth.currentUser?.getIdToken(true);
+      if (token) {
+        const params = new URLSearchParams({
+          token,
+          uid: user.uid,
+          name: user.displayName || profile?.displayName || 'User',
+          email: user.email || '',
+          photo: user.photoURL || '',
+        });
+        openDeepLink(`crazydesk://checkin?${params.toString()}`);
+
+        // Start token refresh interval (re-send every 50 min)
+        if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
+        tokenRefreshRef.current = setInterval(async () => {
+          try {
+            const freshToken = await auth.currentUser?.getIdToken(true);
+            if (freshToken) {
+              openDeepLink(`crazydesk://refresh?token=${encodeURIComponent(freshToken)}`);
+            }
+          } catch (e) {
+            console.warn('Token refresh failed:', e);
+          }
+        }, 50 * 60 * 1000);
+      }
+    } catch {
+      // protocol may not be registered
+    }
+
+    // If desktop doesn't respond within 8 seconds, stop waiting
+    setTimeout(() => {
+      setWaitingForDesktop(false);
+      setLoading(false);
+    }, 8000);
+  }, [user, profile, openDeepLink]);
+
+  // BREAK CONTROLS (browser sessions only)
+  const handleStartBreak = useCallback(async () => {
+    if (!currentSessionId || sessionSource !== 'browser') return;
+    setLoading(true);
+    setIsOnBreak(true); // optimistic
+
+    try {
+      const ref = doc(db, 'work_logs', currentSessionId);
+      await updateDoc(ref, {
+        status: 'break',
+        breaks: arrayUnion({ startTime: Timestamp.now() }),
+      });
+      toast.success('Break started');
+    } catch (err: any) {
+      console.error('Start break error:', err);
+      setIsOnBreak(false);
+      toast.error('Failed to start break');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentSessionId, sessionSource]);
+
+  const handleEndBreak = useCallback(async () => {
+    if (!currentSessionId || sessionSource !== 'browser') return;
+    setLoading(true);
+    setIsOnBreak(false); // optimistic
+
+    try {
+      const ref = doc(db, 'work_logs', currentSessionId);
+      const snap = await getDocs(
+        query(collection(db, 'work_logs'), where('__name__', '==', currentSessionId)),
+      );
+      if (!snap.empty) {
+        const data = snap.docs[0].data();
+        const breaks = [...(data.breaks || [])];
+        if (breaks.length > 0 && !breaks[breaks.length - 1].endTime) {
+          const startT = breaks[breaks.length - 1].startTime?.toDate?.();
+          const endT = new Date();
+          breaks[breaks.length - 1] = {
+            ...breaks[breaks.length - 1],
+            endTime: Timestamp.now(),
+            durationMinutes: startT
+              ? Math.round((endT.getTime() - startT.getTime()) / 60000)
+              : 0,
+          };
+          await updateDoc(ref, { status: 'active', breaks });
+          toast.success('Break ended');
+        }
+      }
+    } catch (err: any) {
+      console.error('End break error:', err);
+      setIsOnBreak(true);
+      toast.error('Failed to end break');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentSessionId, sessionSource]);
+
+  // FORCE CLOSE stale desktop session
+  const handleForceCloseDesktop = useCallback(async () => {
+    if (!currentSessionId || !checkInTime) return;
+    setLoading(true);
+    try {
+      const now = new Date();
+      const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
+      const breakMin = Math.round(totalBreakSeconds / 60);
+
+      const ref = doc(db, 'work_logs', currentSessionId);
+      await updateDoc(ref, {
+        checkOutTime: serverTimestamp(),
+        status: 'completed',
+        durationMinutes: totalMin,
+        breakDurationMinutes: breakMin,
+        report: '[Auto] Desktop app became unresponsive — session closed from browser',
+        attachments: [],
+        flagged: true,
+        flagReason: 'Desktop app heartbeat stopped — auto-closed from browser',
+      });
+
+      setIsCheckedIn(false);
+      setIsOnBreak(false);
+      setCurrentSessionId(null);
+      setSessionSource(null);
+      setCheckInTime(null);
+      setElapsedTime(0);
+      setTotalBreakSeconds(0);
+      setIsStaleDesktop(false);
+      toast.success('Stale desktop session closed');
+    } catch (err: any) {
+      console.error('Force close error:', err);
+      toast.error('Failed to close session');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentSessionId, checkInTime, totalBreakSeconds]);
+
+  // MANUAL SYNC — re-read the session from Firestore
+  const handleSync = useCallback(async () => {
+    if (!currentSessionId) return;
+    setLoading(true);
+    try {
+      const ref = doc(db, 'work_logs', currentSessionId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.status === 'completed' || data.status === 'cancelled') {
+          // Desktop already checked out — clear local state
+          setIsCheckedIn(false);
+          setIsOnBreak(false);
+          setCurrentSessionId(null);
+          setSessionSource(null);
+          setCheckInTime(null);
+          setElapsedTime(0);
+          setTotalBreakSeconds(0);
+          setIsStaleDesktop(false);
+          toast.success('Session already completed — synced!');
+        } else {
+          toast.success('Session is still active');
+        }
+      } else {
+        // Doc doesn't exist anymore
+        setIsCheckedIn(false);
+        setCurrentSessionId(null);
+        toast.success('Session not found — synced!');
+      }
+    } catch (err: any) {
+      console.error('Sync error:', err);
+      toast.error('Sync failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentSessionId]);
+
+  // CHECK-OUT (browser sessions only - opens report modal)
+  const handleCheckOut = useCallback(() => {
+    if (sessionSource !== 'browser') return;
+    setShowReportModal(true);
+  }, [sessionSource]);
+
+  const submitCheckOut = useCallback(async () => {
+    if (!currentSessionId || !checkInTime) return;
+    setLoading(true);
+    try {
+      const now = new Date();
+      const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
+      const breakMin = Math.round(totalBreakSeconds / 60);
+
+      const ref = doc(db, 'work_logs', currentSessionId);
+      await updateDoc(ref, {
+        checkOutTime: serverTimestamp(),
+        status: 'completed',
+        durationMinutes: totalMin,
+        breakDurationMinutes: breakMin,
+        report: reportText || '',
+        attachments: proofLink ? [proofLink] : [],
+      });
+
+      // Optimistic clear
+      setIsCheckedIn(false);
+      setIsOnBreak(false);
+      setCurrentSessionId(null);
+      setSessionSource(null);
+      setCheckInTime(null);
+      setElapsedTime(0);
+      setTotalBreakSeconds(0);
+      setShowReportModal(false);
+      setReportText('');
+      setProofLink('');
+      toast.success('Checked out successfully');
+    } catch (err: any) {
+      console.error('Check-out error:', err);
+      toast.error('Failed to check out');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentSessionId, checkInTime, totalBreakSeconds, reportText, proofLink]);
+
+  // RENDER
+  if (!user) return null;
+
+  const workSeconds = Math.max(0, elapsedTime - totalBreakSeconds);
+
+  // Modals renderer (shared by compact and full)
+  const renderModals = () => (
+    <>
+      {/* ═══ STEP 1: Choose Method ═══ */}
+      {modalStep === 1 && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
+              <Clock className="w-5 h-5 text-success" /> Check In
+            </h3>
+            <p className="text-sm text-base-content/60 mb-4">
+              How would you like to track your work?
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {/* Continue in Browser */}
+              <button
+                className="btn btn-success btn-block gap-3 justify-start text-left h-auto py-4"
+                onClick={handleBrowserCheckIn}
+                disabled={loading}
+              >
+                {loading ? (
+                  <span className="loading loading-spinner loading-sm shrink-0" />
+                ) : (
+                  <Globe className="w-5 h-5 shrink-0" />
+                )}
+                <div>
+                  <div className="font-bold text-sm">Continue in Browser</div>
+                  <div className="text-xs opacity-80 font-normal">Timer &amp; manual tracking</div>
+                </div>
+              </button>
+
+              {/* Use Desktop App */}
+              <button
+                className="btn btn-outline btn-block gap-3 justify-start text-left h-auto py-4"
+                onClick={handleDesktopCheckIn}
+                disabled={loading}
+              >
+                <Monitor className="w-5 h-5 shrink-0" />
+                <div>
+                  <div className="font-bold text-sm">Use Desktop App</div>
+                  <div className="text-xs opacity-70 font-normal">Screen &amp; camera capture, full tracking</div>
+                </div>
+              </button>
             </div>
 
-            {!isCheckedIn ? (
-                <button 
-                    onClick={handleCheckIn} 
-                    disabled={loading}
-                    className="btn btn-success w-full gap-2 shadow-lg hover:shadow-success/30 transition-all font-bold"
-                >
-                    <Clock size={18} />
-                    {loading ? 'Checking in...' : `Check In ${actionTimerText}`}
-                </button>
-            ) : (
-                <div className="grid grid-cols-2 gap-3 w-full">
-                    {!isOnBreak ? (
-                        <button 
-                            onClick={handleTakeBreak}
-                            disabled={loading}
-                            className="btn btn-warning btn-outline gap-2 font-bold"
-                            title="Take a break (stops work timer)"
-                        >
-                            <Coffee size={18} />
-                            Break
-                        </button>
-                    ) : (
-                        <button 
-                            onClick={handleResumeWork}
-                            disabled={loading}
-                            className="btn btn-success btn-outline gap-2 font-bold"
-                            title="Resume work"
-                        >
-                            <Play size={18} />
-                            Resume
-                        </button>
-                    )}
-                    
-                    <button 
-                        onClick={handleCheckOutClick}
-                        disabled={loading} 
-                        className="btn btn-error btn-outline gap-2 font-bold px-2"
-                        title={actionTimerText}
-                    >
-                        <Download size={18} className="rotate-180" />
-                        <span className="truncate">Check Out {actionTimerText && isCheckedIn ? actionTimerText : ''}</span>
-                    </button>
-                </div>
-            )}
-
-            {/* Check Out Modal */}
-            {showReportModal && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in zoom-in duration-200">
-                    <div className="bg-base-100 rounded-2xl shadow-2xl p-6 w-full max-w-md border border-base-200">
-                        <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                           <CheckCircle className="text-success" size={24}/> Check Out & Report
-                        </h3>
-                        
-                        <div className="form-control mb-4">
-                            <label className="label">
-                                <span className="label-text font-medium">Session Summary</span>
-                                <span className="label-text-alt opacity-60">What did you achieve?</span>
-                            </label>
-                            <textarea 
-                                className="textarea textarea-bordered h-32 focus:border-primary" 
-                                placeholder="- Completed Task A&#10;- Fixed bug in module B&#10;- Reviewed PRs"
-                                value={reportText}
-                                onChange={(e) => setReportText(e.target.value)}
-                            ></textarea>
-                        </div>
-                        
-                        {/* Optional: Attachment UI can go here later */}
-                        <div className="form-control mb-6">
-                            <label className="label cursor-pointer justify-start gap-4">
-                                <LinkIcon size={16} />
-                                <span className="label-text font-medium">Proof of Work (Link)</span>
-                            </label>
-                            <input 
-                                type="url"
-                                className="input input-bordered w-full focus:border-primary"
-                                placeholder="https://..."
-                                value={proofLink}
-                                onChange={(e) => setProofLink(e.target.value)}
-                            />
-                        </div>
-
-                        <div className="flex justify-end gap-3">
-                            <button 
-                                className="btn btn-ghost"
-                                onClick={() => setShowReportModal(false)}
-                                disabled={loading}
-                            >
-                                Cancel
-                            </button>
-                            <button 
-                                className="btn btn-primary"
-                                onClick={confirmCheckOut}
-                                disabled={loading || !reportText.trim()}
-                            >
-                                {loading ? <span className="loading loading-spinner"></span> : 'Submit Report & Check Out'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <div className="modal-action mt-4">
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(0)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setModalStep(0)} />
         </div>
+      )}
+
+      {/* ═══ STEP 2: Open Desktop App ═══ */}
+      {modalStep === 2 && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
+              <Monitor className="w-5 h-5 text-primary" /> Open Desktop App
+            </h3>
+            <p className="text-sm text-base-content/60 mb-4">
+              CrazyDesk Tracker will open and automatically check you in with
+              full screen &amp; camera tracking.
+            </p>
+
+            <div className="flex flex-col gap-3">
+              <button
+                className="btn btn-primary btn-block gap-2"
+                onClick={handleOpenDesktopApp}
+                disabled={loading}
+              >
+                {loading ? (
+                  <span className="loading loading-spinner loading-sm" />
+                ) : (
+                  <ExternalLink className="w-4 h-4" />
+                )}
+                Open CrazyDesk App
+              </button>
+
+              <div className="divider text-xs text-base-content/40 my-0">OR</div>
+
+              <a
+                href="https://github.com/roneyassistophere-creator/crazydesk/releases"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-ghost btn-sm gap-2"
+              >
+                <Download className="w-4 h-4" /> Download App
+              </a>
+            </div>
+
+            <div className="modal-action mt-3">
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(1)}>
+                ← Back
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(0)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setModalStep(0)} />
+        </div>
+      )}
+
+      {/* ═══ CHECK-OUT REPORT MODAL ═══ */}
+      {showReportModal && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            <h3 className="font-bold text-lg flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-success" /> Check Out Report
+            </h3>
+
+            <div className="py-4 space-y-3">
+              <div className="stats stats-horizontal w-full bg-base-300">
+                <div className="stat py-2 px-3">
+                  <div className="stat-title text-xs">Work Time</div>
+                  <div className="stat-value text-lg">{fmt(workSeconds)}</div>
+                </div>
+                <div className="stat py-2 px-3">
+                  <div className="stat-title text-xs">Breaks</div>
+                  <div className="stat-value text-lg">{fmt(totalBreakSeconds)}</div>
+                </div>
+              </div>
+
+              <div className="form-control">
+                <label className="label">
+                  <span className="label-text text-sm">
+                    What did you work on? (optional)
+                  </span>
+                </label>
+                <textarea
+                  className="textarea textarea-bordered h-24 text-sm"
+                  placeholder="Describe what you accomplished today..."
+                  value={reportText}
+                  onChange={(e) => setReportText(e.target.value)}
+                />
+              </div>
+
+              <div className="form-control">
+                <label className="label">
+                  <span className="label-text text-sm">
+                    Proof of work link (optional)
+                  </span>
+                </label>
+                <div className="input-group">
+                  <span className="bg-base-300 px-3 flex items-center">
+                    <LinkIcon className="w-4 h-4" />
+                  </span>
+                  <input
+                    type="url"
+                    className="input input-bordered w-full text-sm"
+                    placeholder="https://github.com/.../pull/42"
+                    value={proofLink}
+                    onChange={(e) => setProofLink(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-action">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowReportModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-success btn-sm gap-1"
+                onClick={submitCheckOut}
+                disabled={loading}
+              >
+                {loading ? (
+                  <span className="loading loading-spinner loading-xs" />
+                ) : (
+                  <CheckCircle className="w-4 h-4" />
+                )}
+                Submit &amp; Check Out
+              </button>
+            </div>
+          </div>
+          <div
+            className="modal-backdrop"
+            onClick={() => setShowReportModal(false)}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  // Compact mode (sidebar)
+  if (compact) {
+    return (
+      <>
+        <div className="flex items-center gap-2">
+          {isCheckedIn ? (
+            <>
+              <span className={`badge badge-sm gap-1 ${isOnBreak ? 'badge-warning' : isStaleDesktop ? 'badge-error' : 'badge-success'}`}>
+                <Clock className="w-3 h-3" /> {fmt(workSeconds)}
+              </span>
+              {sessionSource === 'desktop' && !isStaleDesktop && (
+                <span className="badge badge-info badge-xs">Desktop</span>
+              )}
+              {isStaleDesktop && (
+                <button
+                  className="badge badge-error badge-xs gap-1 cursor-pointer hover:brightness-110"
+                  onClick={handleForceCloseDesktop}
+                  disabled={loading}
+                  title="Desktop app offline — click to force close"
+                >
+                  <AlertTriangle className="w-2.5 h-2.5" /> Stale
+                </button>
+              )}
+              {isOnBreak && <span className="badge badge-warning badge-xs">Break</span>}
+            </>
+          ) : waitingForDesktop ? (
+            <span className="badge badge-sm badge-ghost gap-1">
+              <span className="loading loading-spinner loading-xs" /> Connecting...
+            </span>
+          ) : (
+            <button
+              className="btn btn-xs btn-success"
+              onClick={handleCheckIn}
+              disabled={loading}
+            >
+              Check In
+            </button>
+          )}
+        </div>
+        {renderModals()}
+      </>
     );
+  }
+
+  // Full widget
+  return (
+    <>
+      <div className="card bg-base-200 shadow-lg">
+        <div className="card-body p-4">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <h3 className="card-title text-sm font-semibold">
+              <Clock className="w-4 h-4" /> Work Session
+            </h3>
+            {isCheckedIn && sessionSource && (
+              <span
+                className={`badge badge-sm gap-1 ${
+                  sessionSource === 'desktop' ? 'badge-info' : 'badge-warning'
+                }`}
+              >
+                {sessionSource === 'desktop' ? (
+                  <><Monitor className="w-3 h-3" /> Desktop</>
+                ) : (
+                  <><Globe className="w-3 h-3" /> Browser</>
+                )}
+              </span>
+            )}
+          </div>
+
+          {/* NOT CHECKED IN */}
+          {!isCheckedIn && !waitingForDesktop && (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <p className="text-base-content/60 text-sm">
+                Ready to start your work session?
+              </p>
+              <button
+                className="btn btn-success btn-md gap-2"
+                onClick={handleCheckIn}
+                disabled={loading}
+              >
+                {loading ? (
+                  <span className="loading loading-spinner loading-sm" />
+                ) : (
+                  <CheckCircle className="w-4 h-4" />
+                )}
+                Check In
+              </button>
+            </div>
+          )}
+
+          {/* WAITING FOR DESKTOP */}
+          {waitingForDesktop && !isCheckedIn && (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <span className="loading loading-spinner loading-md text-primary" />
+              <p className="text-sm text-base-content/60">
+                Waiting for Desktop App to connect...
+              </p>
+              <button
+                className="btn btn-ghost btn-xs"
+                onClick={() => { setWaitingForDesktop(false); setLoading(false); }}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {/* CHECKED IN */}
+          {isCheckedIn && (
+            <div className="flex flex-col gap-3">
+              {/* Timer */}
+              <div className="text-center">
+                <div className="text-3xl font-mono font-bold text-primary">
+                  {fmt(workSeconds)}
+                </div>
+                <div className="text-xs text-base-content/50 mt-1">
+                  Total: {fmt(elapsedTime)} · Breaks: {fmt(totalBreakSeconds)}
+                </div>
+                {isOnBreak && (
+                  <span className="badge badge-warning badge-sm mt-2 gap-1">
+                    <Coffee className="w-3 h-3" /> On Break
+                  </span>
+                )}
+              </div>
+
+              {/* Browser session controls */}
+              {sessionSource === 'browser' && (
+                <div className="flex gap-2 justify-center">
+                  {!isOnBreak ? (
+                    <>
+                      <button
+                        className="btn btn-warning btn-sm gap-1"
+                        onClick={handleStartBreak}
+                        disabled={loading}
+                      >
+                        <Coffee className="w-3.5 h-3.5" /> Break
+                      </button>
+                      <button
+                        className="btn btn-error btn-sm gap-1"
+                        onClick={handleCheckOut}
+                        disabled={loading}
+                      >
+                        <XCircle className="w-3.5 h-3.5" /> Check Out
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="btn btn-success btn-sm gap-1"
+                      onClick={handleEndBreak}
+                      disabled={loading}
+                    >
+                      <Play className="w-3.5 h-3.5" /> Resume Work
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Desktop session: show sync controls */}
+              {sessionSource === 'desktop' && (
+                <div className="flex flex-col items-center gap-2">
+                  {isStaleDesktop ? (
+                    <>
+                      <div className="flex items-center gap-1 text-warning text-xs">
+                        <AlertTriangle className="w-3 h-3" />
+                        Desktop app appears offline
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          className="btn btn-warning btn-xs gap-1"
+                          onClick={handleForceCloseDesktop}
+                          disabled={loading}
+                        >
+                          {loading ? <span className="loading loading-spinner loading-xs" /> : <XCircle className="w-3 h-3" />}
+                          Force Close
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-xs gap-1"
+                          onClick={handleSync}
+                          disabled={loading}
+                        >
+                          <RefreshCw className="w-3 h-3" /> Sync
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-info">
+                        <Monitor className="w-3 h-3 inline mr-1" />
+                        Managed from Desktop App
+                      </p>
+                      <button
+                        className="btn btn-ghost btn-xs gap-1"
+                        onClick={handleSync}
+                        disabled={loading}
+                        title="Refresh session status"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {renderModals()}
+    </>
+  );
 }

@@ -6,7 +6,6 @@ import { MemberProfile, TimeSlot } from '@/types/team';
 import TeamMemberCard from '@/components/team/TeamMemberCard';
 import MemberDetailsModal from '@/components/team/MemberDetailsModal';
 import EditMemberModal from '@/components/team/EditMemberModal';
-import CheckInOutWidget from '@/components/team/CheckInOutWidget';
 import { useAuth } from '@/context/AuthContext';
 import { Clock, Loader2 } from 'lucide-react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -35,14 +34,12 @@ export default function TeamAvailability() {
         logsMap[data.userId] = { ...data, id: doc.id };
       });
       setActiveLogs(logsMap);
+    }, (error) => {
+      console.error('Team availability onSnapshot error:', error);
     });
 
     return () => unsubscribe();
   }, []);
-
-  const handleStatusChange = () => {
-     // Handled via real-time listener
-  };
 
   // Helper to determine status and sort priority
   const getMemberSortInfo = (member: MemberProfile) => {
@@ -149,7 +146,6 @@ export default function TeamAvailability() {
                 Check team schedules and current status.
             </p>
         </div>
-        <CheckInOutWidget onStatusChange={handleStatusChange} compact={true} />
       </div>
 
       {sortedMembers.length === 0 ? (

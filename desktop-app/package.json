@@ -1,0 +1,61 @@
+{
+  "name": "crazydesk-tracker",
+  "version": "1.0.0",
+  "description": "CrazyDesk Desktop — Check In, Check Out & Web Tracker",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.crazydesk.tracker",
+    "productName": "CrazyDesk Tracker",
+    "protocols": [
+      {
+        "name": "CrazyDesk Protocol",
+        "schemes": ["crazydesk"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg", "zip"],
+      "icon": "assets/icon.png"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "assets/icon.png",
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "modules/**/*",
+      "assets/**/*",
+      ".env"
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
