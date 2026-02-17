@@ -94,6 +94,16 @@ service cloud.firestore {
       allow delete: if isManagerOrAdmin();
     }
 
+    // Tasks collection rules
+    match /tasks/{taskId} {
+      allow read, write: if isAuthenticated();
+
+      // Subtasks subcollection
+      match /subtasks/{subtaskId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+
     // Capture Commands (remote capture triggers from web → desktop app)
     match /capture_commands/{commandId} {
       // Users can read their own capture commands (desktop app polls these)

@@ -12,9 +12,38 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const {
   app, BrowserWindow, Tray, Menu, ipcMain,
   nativeImage, desktopCapturer, Notification, shell,
-  systemPreferences,
+  systemPreferences, protocol, net,
 } = require('electron');
 const path = require('path');
+const fs = require('fs');
+
+const isMac = process.platform === 'darwin';
+const isWin = process.platform === 'win32';
+
+// ─── Register custom protocol for serving local files with correct MIME types ──
+// This fixes ES module imports on Windows where file:// doesn't provide MIME types
+const MIME_TYPES = {
+  '.html': 'text/html',
+  '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+};
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'app',
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    corsEnabled: false,
+    stream: true,
+  },
+}]);
 
 // ─── Supabase (runs in main process where npm packages work) ──
 const { createClient } = require('@supabase/supabase-js');
@@ -67,7 +96,7 @@ function createWindow() {
     minHeight: 600,
     resizable: true,
     frame: true,
-    titleBarStyle: 'hiddenInset',
+    ...(isMac ? { titleBarStyle: 'hiddenInset' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -75,17 +104,18 @@ function createWindow() {
       sandbox: false,
       backgroundThrottling: false, // Keep renderer active when window is hidden
     },
-    icon: getTrayIcon('idle'),
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     show: false,
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // Load via custom 'app://' protocol for correct MIME types (fixes ES modules on Windows)
+  mainWindow.loadURL('app://crazydesk/renderer/index.html');
 
   // Ensure renderer stays active when window is hidden (for background captures)
   mainWindow.webContents.setBackgroundThrottling(false);
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+  mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
+    shell.openExternal(linkUrl);
     return { action: 'deny' };
   });
 
@@ -95,8 +125,10 @@ function createWindow() {
   // Without this, Chromium pauses timers/media when document.hidden = true.
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.executeJavaScript(`
-      Object.defineProperty(document, 'hidden', { get: () => false });
-      Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+      try {
+        Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+      } catch(e) { console.warn('Visibility override failed:', e); }
     `).catch(() => {});
   });
 
@@ -121,16 +153,15 @@ function createWindow() {
 }
 
 // ─── Tray ────────────────────────────────────────────────────
-function getTrayIcon(status) {
-  const size = 16;
-  const canvas = `<svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 1}" fill="${
-      status === 'active' ? '#22c55e' :
-      status === 'break' ? '#eab308' :
-      status === 'capturing' ? '#ef4444' : '#9ca3af'
-    }"/>
-  </svg>`;
-  return nativeImage.createFromBuffer(Buffer.from(canvas));
+function getTrayIcon(_status) {
+  // Use the app icon resized for tray — works on all platforms
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  try {
+    return nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  } catch (e) {
+    console.warn('[Tray] Failed to load icon:', e);
+    return nativeImage.createEmpty();
+  }
 }
 
 function createTray() {
@@ -199,13 +230,13 @@ function handleDeepLink(url) {
 }
 
 // macOS open-url event
-app.on('open-url', (_ev, url) => {
+app.on('open-url', (_ev, deepUrl) => {
   _ev.preventDefault();
   if (mainWindow) {
-    handleDeepLink(url);
+    handleDeepLink(deepUrl);
   } else {
     // Store for when window is ready
-    app._pendingDeepLink = url;
+    app._pendingDeepLink = deepUrl;
   }
 });
 
@@ -220,15 +251,13 @@ ipcMain.on('sync-session-state', (_ev, state) => {
 // Screen capture — SILENT, with macOS permission handling
 ipcMain.handle('capture-screen', async () => {
   try {
-    // Check macOS screen recording permission
-    if (process.platform === 'darwin') {
+    // Check macOS screen recording permission (Windows doesn't need this)
+    if (isMac) {
       const status = systemPreferences.getMediaAccessStatus('screen');
       console.log(`[Capture] macOS screen recording permission status: ${status}`);
       if (status !== 'granted') {
         console.warn('[Capture] Screen recording not granted. Opening System Preferences...');
-        // Open System Preferences to the Screen Recording pane
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
-        // Return a flag so renderer knows to show a message
         return { permissionNeeded: true };
       }
     }
@@ -247,7 +276,7 @@ ipcMain.handle('capture-screen', async () => {
     console.log(`[Capture] Screen thumbnail size: ${size.width}x${size.height}`);
     if (size.width === 0 || size.height === 0) {
       console.warn('[Capture] Screen thumbnail is empty — permission likely denied');
-      if (process.platform === 'darwin') {
+      if (isMac) {
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
         return { permissionNeeded: true };
       }
@@ -306,6 +335,38 @@ ipcMain.handle('upload-image', async (_ev, { buffer, prefix, userId }) => {
 
 // ─── App lifecycle ───────────────────────────────────────────
 app.whenReady().then(() => {
+  // Register custom protocol to serve local files with correct MIME types
+  // This ensures ES module imports work on Windows (file:// doesn't provide MIME types)
+  protocol.handle('app', (request) => {
+    // app://crazydesk/renderer/index.html → __dirname/renderer/index.html
+    const requestUrl = new URL(request.url);
+    // Remove leading slash for Windows compatibility
+    let filePath = decodeURIComponent(requestUrl.pathname);
+    if (filePath.startsWith('/')) filePath = filePath.substring(1);
+    const fullPath = path.join(__dirname, filePath);
+
+    try {
+      // Security: ensure the path stays within __dirname
+      const resolved = path.resolve(fullPath);
+      const base = path.resolve(__dirname);
+      if (!resolved.startsWith(base)) {
+        return new Response('Forbidden', { status: 403 });
+      }
+
+      const data = fs.readFileSync(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+
+      return new Response(data, {
+        status: 200,
+        headers: { 'Content-Type': mimeType },
+      });
+    } catch (e) {
+      console.error('[Protocol] File not found:', fullPath, e.message);
+      return new Response('Not Found', { status: 404 });
+    }
+  });
+
   createWindow();
   createTray();
 
