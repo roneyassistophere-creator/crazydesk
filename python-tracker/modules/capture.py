@@ -59,20 +59,53 @@ def capture_screen() -> bytes | None:
 
 # ── Camera capture ─────────────────────────────────────────────
 
+def _is_blank_frame(frame, threshold: float = 12.0) -> bool:
+    """Return True if the frame is mostly black / blank."""
+    import numpy as np
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return float(np.mean(gray)) < threshold
+
+
 def capture_camera() -> bytes | None:
     """Take a silent webcam photo. Returns JPEG bytes or None."""
     cap = None
     try:
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # DirectShow is more reliable on Windows
         if not cap.isOpened():
-            logger.warning("Camera not available")
-            return None
+            logger.warning("Camera not available (DirectShow), trying default backend")
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                logger.warning("Camera not available")
+                return None
 
-        # Let auto-exposure settle
-        time.sleep(0.5)
-        ret, frame = cap.read()
-        if not ret or frame is None:
-            logger.warning("Camera read failed")
+        # Force a reasonable resolution so the sensor activates properly
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        # Discard warmup frames so sensor auto-exposure / white-balance can settle.
+        # Many webcams need 10-30 frames before producing a usable image.
+        warmup_frames = 20
+        for _ in range(warmup_frames):
+            cap.read()
+        time.sleep(0.3)          # extra settling time after warmup reads
+
+        # Now read the real frame — retry a couple of times if still blank
+        frame = None
+        for attempt in range(5):
+            ret, candidate = cap.read()
+            if not ret or candidate is None:
+                logger.warning("Camera read failed on attempt %d", attempt + 1)
+                time.sleep(0.2)
+                continue
+            if _is_blank_frame(candidate):
+                logger.info("Blank frame on attempt %d, retrying…", attempt + 1)
+                time.sleep(0.3)
+                continue
+            frame = candidate
+            break
+
+        if frame is None:
+            logger.warning("Camera produced only blank / unreadable frames after retries")
             return None
 
         success, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
