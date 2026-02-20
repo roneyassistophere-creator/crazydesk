@@ -16,6 +16,19 @@ import {
   ExternalLink, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 
+// Apple logo SVG (lucide-react doesn't include brand icons)
+const AppleIcon = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+    <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
+  </svg>
+);
+
+const WindowsIcon = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+    <path d="M3 12V6.75l6-1.32v6.48L3 12zm6.98.04l.02 6.47-6.98-1.01V13l6.96.04zM10.7 5.09L20 3.5V12h-9.3V5.09zM20 13v8.5l-9.3-1.59V13H20z" />
+  </svg>
+);
+
 interface CheckInOutWidgetProps {
   onStatusChange?: (isOnline: boolean) => void;
   compact?: boolean;
@@ -42,10 +55,11 @@ export default function CheckInOutWidget({
   const [proofLink, setProofLink] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Modal flow: step 0 = hidden, step 1 = choose method, step 2 = open app prompt
-  const [modalStep, setModalStep] = useState<0 | 1 | 2>(0);
+  // Modal flow: 0=hidden, 1=choose method, 2=choose platform (mac/win), 3=open mac app, 4=open win tracker
+  const [modalStep, setModalStep] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [waitingForDesktop, setWaitingForDesktop] = useState(false);
   const [isStaleDesktop, setIsStaleDesktop] = useState(false);
+  const [waitingForPythonTracker, setWaitingForPythonTracker] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tokenRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -259,12 +273,22 @@ export default function CheckInOutWidget({
     }
   }, [user, profile]);
 
-  // DESKTOP CHECK-IN: Show step 2 modal
+  // DESKTOP CHECK-IN: Show platform picker (step 2)
   const handleDesktopCheckIn = useCallback(() => {
     setModalStep(2);
   }, []);
 
-  // Actually send the deep link to desktop app
+  // macOS desktop: show step 3 (deep link)
+  const handleMacDesktop = useCallback(() => {
+    setModalStep(3);
+  }, []);
+
+  // Windows desktop: show step 4 (Python tracker)
+  const handleWindowsDesktop = useCallback(() => {
+    setModalStep(4);
+  }, []);
+
+  // macOS: send the deep link to Electron desktop app
   const handleOpenDesktopApp = useCallback(async () => {
     if (!user) return;
     setModalStep(0);
@@ -306,6 +330,76 @@ export default function CheckInOutWidget({
       setLoading(false);
     }, 8000);
   }, [user, profile, openDeepLink]);
+
+  // Windows: connect to Python tracker via local HTTP server
+  const PYTHON_TRACKER_URL = 'http://127.0.0.1:59210';
+
+  const handleConnectPythonTracker = useCallback(async () => {
+    if (!user) return;
+    setModalStep(0);
+    setLoading(true);
+    setWaitingForPythonTracker(true);
+
+    try {
+      // First check if the Python tracker is running
+      const statusRes = await fetch(`${PYTHON_TRACKER_URL}/api/status`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
+      if (!statusRes || !statusRes.ok) {
+        toast.error('Python Tracker is not running.\nPlease start it first: python crazydesk_tracker.py');
+        setWaitingForPythonTracker(false);
+        setLoading(false);
+        return;
+      }
+
+      const token = await auth.currentUser?.getIdToken(true);
+      if (!token) {
+        toast.error('Could not get auth token');
+        setWaitingForPythonTracker(false);
+        setLoading(false);
+        return;
+      }
+
+      const res = await fetch(`${PYTHON_TRACKER_URL}/api/checkin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          uid: user.uid,
+          name: user.displayName || profile?.displayName || 'User',
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        toast.success(data.resumed ? 'Reconnected to active session!' : 'Checked in via Python Tracker!');
+
+        // Start token refresh interval (POST to Python tracker every 50 min)
+        if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
+        tokenRefreshRef.current = setInterval(async () => {
+          try {
+            const freshToken = await auth.currentUser?.getIdToken(true);
+            if (freshToken) {
+              fetch(`${PYTHON_TRACKER_URL}/api/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: freshToken }),
+              }).catch(() => {});
+            }
+          } catch (e) {
+            console.warn('Token refresh to Python tracker failed:', e);
+          }
+        }, 50 * 60 * 1000);
+      } else {
+        toast.error(`Check-in failed: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      console.error('Python Tracker connection error:', err);
+      toast.error('Could not connect to Python Tracker.\nMake sure it\'s running on port 59210.');
+    } finally {
+      setWaitingForPythonTracker(false);
+      setLoading(false);
+    }
+  }, [user, profile]);
 
   // BREAK CONTROLS (browser sessions only)
   const handleStartBreak = useCallback(async () => {
@@ -440,29 +534,56 @@ export default function CheckInOutWidget({
     }
   }, [currentSessionId]);
 
-  // CHECK-OUT (browser sessions only - opens report modal)
+  // CHECK-OUT — opens report modal (works for both browser and desktop sessions)
   const handleCheckOut = useCallback(() => {
-    if (sessionSource !== 'browser') return;
     setShowReportModal(true);
-  }, [sessionSource]);
+  }, []);
 
   const submitCheckOut = useCallback(async () => {
     if (!currentSessionId || !checkInTime) return;
     setLoading(true);
     try {
-      const now = new Date();
-      const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
-      const breakMin = Math.round(totalBreakSeconds / 60);
-
-      const ref = doc(db, 'work_logs', currentSessionId);
-      await updateDoc(ref, {
-        checkOutTime: serverTimestamp(),
-        status: 'completed',
-        durationMinutes: totalMin,
-        breakDurationMinutes: breakMin,
-        report: reportText || '',
-        attachments: proofLink ? [proofLink] : [],
-      });
+      // For desktop sessions, send checkout to Python tracker
+      if (sessionSource === 'desktop') {
+        try {
+          const res = await fetch(`${PYTHON_TRACKER_URL}/api/checkout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ report: reportText || '', proofLink: proofLink || '' }),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || 'Checkout failed');
+        } catch (fetchErr) {
+          // If tracker is unreachable, fall through to direct Firestore update
+          console.warn('Python tracker unreachable, checking out via Firestore directly:', fetchErr);
+          const now = new Date();
+          const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
+          const breakMin = Math.round(totalBreakSeconds / 60);
+          const ref = doc(db, 'work_logs', currentSessionId);
+          await updateDoc(ref, {
+            checkOutTime: serverTimestamp(),
+            status: 'completed',
+            durationMinutes: totalMin,
+            breakDurationMinutes: breakMin,
+            report: reportText || '',
+            attachments: proofLink ? [proofLink] : [],
+          });
+        }
+      } else {
+        // Browser session — update Firestore directly
+        const now = new Date();
+        const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
+        const breakMin = Math.round(totalBreakSeconds / 60);
+        const ref = doc(db, 'work_logs', currentSessionId);
+        await updateDoc(ref, {
+          checkOutTime: serverTimestamp(),
+          status: 'completed',
+          durationMinutes: totalMin,
+          breakDurationMinutes: breakMin,
+          report: reportText || '',
+          attachments: proofLink ? [proofLink] : [],
+        });
+      }
 
       // Optimistic clear
       setIsCheckedIn(false);
@@ -482,7 +603,7 @@ export default function CheckInOutWidget({
     } finally {
       setLoading(false);
     }
-  }, [currentSessionId, checkInTime, totalBreakSeconds, reportText, proofLink]);
+  }, [currentSessionId, checkInTime, totalBreakSeconds, reportText, proofLink, sessionSource]);
 
   // RENDER
   if (!user) return null;
@@ -545,12 +666,62 @@ export default function CheckInOutWidget({
         </div>
       )}
 
-      {/* ═══ STEP 2: Open Desktop App ═══ */}
+      {/* ═══ STEP 2: Choose Platform (macOS / Windows) ═══ */}
       {modalStep === 2 && (
         <div className="modal modal-open">
           <div className="modal-box max-w-sm">
             <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
-              <Monitor className="w-5 h-5 text-primary" /> Open Desktop App
+              <Monitor className="w-5 h-5 text-primary" /> Choose Your Platform
+            </h3>
+            <p className="text-sm text-base-content/60 mb-4">
+              Select your operating system to connect the right tracker.
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {/* macOS — Electron desktop app via deep link */}
+              <button
+                className="btn btn-outline btn-block gap-3 justify-start text-left h-auto py-4"
+                onClick={handleMacDesktop}
+              >
+                <AppleIcon className="w-5 h-5 shrink-0" />
+                <div>
+                  <div className="font-bold text-sm">macOS</div>
+                  <div className="text-xs opacity-70 font-normal">CrazyDesk Desktop App (Electron)</div>
+                </div>
+              </button>
+
+              {/* Windows — Python tracker via local HTTP server */}
+              <button
+                className="btn btn-outline btn-block gap-3 justify-start text-left h-auto py-4"
+                onClick={handleWindowsDesktop}
+              >
+                <WindowsIcon className="w-5 h-5 shrink-0" />
+                <div>
+                  <div className="font-bold text-sm">Windows</div>
+                  <div className="text-xs opacity-70 font-normal">CrazyDesk Python Tracker</div>
+                </div>
+              </button>
+            </div>
+
+            <div className="modal-action mt-3">
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(1)}>
+                ← Back
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(0)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setModalStep(0)} />
+        </div>
+      )}
+
+      {/* ═══ STEP 3: Open macOS Desktop App (Electron deep link) ═══ */}
+      {modalStep === 3 && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
+              <AppleIcon className="w-5 h-5 text-primary" /> Open macOS App
             </h3>
             <p className="text-sm text-base-content/60 mb-4">
               CrazyDesk Tracker will open and automatically check you in with
@@ -579,12 +750,65 @@ export default function CheckInOutWidget({
                 rel="noopener noreferrer"
                 className="btn btn-ghost btn-sm gap-2"
               >
-                <Download className="w-4 h-4" /> Download App
+                <Download className="w-4 h-4" /> Download macOS App
               </a>
             </div>
 
             <div className="modal-action mt-3">
-              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(1)}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(2)}>
+                ← Back
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(0)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setModalStep(0)} />
+        </div>
+      )}
+
+      {/* ═══ STEP 4: Connect Windows Python Tracker ═══ */}
+      {modalStep === 4 && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
+              <WindowsIcon className="w-5 h-5 text-primary" /> Windows Python Tracker
+            </h3>
+            <p className="text-sm text-base-content/60 mb-4">
+              Make sure the Python Tracker is running, then click connect.
+            </p>
+
+            <div className="bg-base-300 rounded-lg p-3 mb-4">
+              <div className="text-xs text-base-content/50 font-mono mb-1">Start the tracker:</div>
+              <code className="text-sm text-primary font-mono">cd python-tracker && python crazydesk_tracker.py</code>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <button
+                className="btn btn-primary btn-block gap-2"
+                onClick={handleConnectPythonTracker}
+                disabled={loading}
+              >
+                {loading ? (
+                  <span className="loading loading-spinner loading-sm" />
+                ) : (
+                  <Monitor className="w-4 h-4" />
+                )}
+                Connect to Tracker
+              </button>
+
+              <div className="divider text-xs text-base-content/40 my-0">SETUP</div>
+
+              <div className="text-xs text-base-content/50 space-y-1">
+                <p><strong>1.</strong> Install Python 3.11+</p>
+                <p><strong>2.</strong> <code className="bg-base-300 px-1 rounded">cd python-tracker && pip install -r requirements.txt</code></p>
+                <p><strong>3.</strong> <code className="bg-base-300 px-1 rounded">python crazydesk_tracker.py</code></p>
+                <p><strong>4.</strong> Click &quot;Connect to Tracker&quot; above</p>
+              </div>
+            </div>
+
+            <div className="modal-action mt-3">
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(2)}>
                 ← Back
               </button>
               <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(0)}>
@@ -706,7 +930,7 @@ export default function CheckInOutWidget({
               )}
               {isOnBreak && <span className="badge badge-warning badge-xs">Break</span>}
             </>
-          ) : waitingForDesktop ? (
+          ) : (waitingForDesktop || waitingForPythonTracker) ? (
             <span className="badge badge-sm badge-ghost gap-1">
               <span className="loading loading-spinner loading-xs" /> Connecting...
             </span>
@@ -771,16 +995,16 @@ export default function CheckInOutWidget({
             </div>
           )}
 
-          {/* WAITING FOR DESKTOP */}
-          {waitingForDesktop && !isCheckedIn && (
+          {/* WAITING FOR DESKTOP / PYTHON TRACKER */}
+          {(waitingForDesktop || waitingForPythonTracker) && !isCheckedIn && (
             <div className="flex flex-col items-center gap-3 py-4">
               <span className="loading loading-spinner loading-md text-primary" />
               <p className="text-sm text-base-content/60">
-                Waiting for Desktop App to connect...
+                {waitingForPythonTracker ? 'Connecting to Python Tracker...' : 'Waiting for Desktop App to connect...'}
               </p>
               <button
                 className="btn btn-ghost btn-xs"
-                onClick={() => { setWaitingForDesktop(false); setLoading(false); }}
+                onClick={() => { setWaitingForDesktop(false); setWaitingForPythonTracker(false); setLoading(false); }}
               >
                 Cancel
               </button>
@@ -865,20 +1089,33 @@ export default function CheckInOutWidget({
                       </div>
                     </>
                   ) : (
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs text-info">
-                        <Monitor className="w-3 h-3 inline mr-1" />
-                        Managed from Desktop App
-                      </p>
-                      <button
-                        className="btn btn-ghost btn-xs gap-1"
-                        onClick={handleSync}
-                        disabled={loading}
-                        title="Refresh session status"
-                      >
-                        <RefreshCw className="w-3 h-3" />
-                      </button>
-                    </div>
+                    <>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs text-info">
+                          <Monitor className="w-3 h-3 inline mr-1" />
+                          Managed from Desktop App
+                        </p>
+                        <button
+                          className="btn btn-ghost btn-xs gap-1"
+                          onClick={handleSync}
+                          disabled={loading}
+                          title="Refresh session status"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <div className="flex gap-2 mt-1">
+                        {!isOnBreak && (
+                          <button
+                            className="btn btn-error btn-sm gap-1"
+                            onClick={handleCheckOut}
+                            disabled={loading}
+                          >
+                            <XCircle className="w-3.5 h-3.5" /> Check Out
+                          </button>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
               )}
