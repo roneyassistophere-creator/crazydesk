@@ -21,11 +21,6 @@ from PIL import Image, ImageDraw
 
 logger = logging.getLogger("crazydesk.gui")
 
-# ── Platform-aware font ────────────────────────────────────────
-IS_MACOS = sys.platform == "darwin"
-FONT_FAMILY = "SF Pro Text" if IS_MACOS else "Segoe UI"
-MONO_FAMILY = "SF Mono" if IS_MACOS else "Consolas"
-
 # ── Colors (dark theme matching the web app) ───────────────────
 BG       = "#1d232a"
 BG2      = "#242b33"
@@ -155,31 +150,19 @@ class TrackerGUI:
         self._root.resizable(False, False)
         self._root.protocol("WM_DELETE_WINDOW", self._on_close_button)
 
-        # Try to set icon — check multiple locations for .exe/.app and dev
+        # Try to set icon — check multiple locations for .exe and dev
         for base in [
             os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."),
             os.path.dirname(os.path.abspath(sys.argv[0])),
             getattr(sys, "_MEIPASS", ""),  # PyInstaller bundle
         ]:
-            if IS_MACOS:
-                # macOS: use .png via PhotoImage
-                png = os.path.join(base, "assets", "icon.png")
-                if os.path.exists(png):
-                    try:
-                        icon_img = tk.PhotoImage(file=png)
-                        self._root.iconphoto(True, icon_img)
-                        break
-                    except Exception:
-                        pass
-            else:
-                # Windows: use .ico
-                ico = os.path.join(base, "assets", "icon.ico")
-                if os.path.exists(ico):
-                    try:
-                        self._root.iconbitmap(ico)
-                        break
-                    except Exception:
-                        pass
+            ico = os.path.join(base, "assets", "icon.ico")
+            if os.path.exists(ico):
+                try:
+                    self._root.iconbitmap(ico)
+                    break
+                except Exception:
+                    pass
 
         # ── Title bar ──────────────────────────────────────────
         title_frame = tk.Frame(self._root, bg=BG2, padx=12, pady=8)
@@ -190,10 +173,10 @@ class TrackerGUI:
         self._dot_canvas.pack(side="left", padx=(0, 8))
         self._draw_dot("idle")
 
-        tk.Label(title_frame, text="CrazyDesk Tracker", font=(FONT_FAMILY, 11, "bold"),
+        tk.Label(title_frame, text="CrazyDesk Tracker", font=("Segoe UI", 11, "bold"),
                  fg=TEXT2, bg=BG2).pack(side="left")
 
-        ver_label = tk.Label(title_frame, text="v1.0.0", font=(FONT_FAMILY, 8),
+        ver_label = tk.Label(title_frame, text="v1.0.0", font=("Segoe UI", 8),
                              fg=TEXT2, bg=BG2)
         ver_label.pack(side="right")
 
@@ -204,7 +187,7 @@ class TrackerGUI:
         self._conn_label = tk.Label(
             conn_frame,
             text="⏳ Waiting for web app connection...",
-            font=(FONT_FAMILY, 9),
+            font=("Segoe UI", 9),
             fg=TEXT2, bg=BG, anchor="w",
         )
         self._conn_label.pack(fill="x")
@@ -215,13 +198,13 @@ class TrackerGUI:
 
         self._user_label = tk.Label(
             user_frame, text="Not connected",
-            font=(FONT_FAMILY, 10, "bold"), fg=WHITE, bg=BG2, anchor="w",
+            font=("Segoe UI", 10, "bold"), fg=WHITE, bg=BG2, anchor="w",
         )
         self._user_label.pack(fill="x")
 
         self._status_label = tk.Label(
             user_frame, text="Open web dashboard → Check In → Desktop → Windows",
-            font=(FONT_FAMILY, 8), fg=TEXT2, bg=BG2, anchor="w", wraplength=290,
+            font=("Segoe UI", 8), fg=TEXT2, bg=BG2, anchor="w", wraplength=290,
         )
         self._status_label.pack(fill="x", pady=(2, 0))
 
@@ -231,13 +214,13 @@ class TrackerGUI:
 
         self._timer_label = tk.Label(
             timer_frame, text="00:00:00",
-            font=(MONO_FAMILY, 32, "bold"), fg=PRIMARY, bg=BG2,
+            font=("Consolas", 32, "bold"), fg=PRIMARY, bg=BG2,
         )
         self._timer_label.pack()
 
         timer_sub = tk.Label(
             timer_frame, text="Work time",
-            font=(FONT_FAMILY, 8), fg=TEXT2, bg=BG2,
+            font=("Segoe UI", 8), fg=TEXT2, bg=BG2,
         )
         timer_sub.pack()
 
@@ -251,9 +234,9 @@ class TrackerGUI:
         for i, (label_text, val) in enumerate([("Captures", "0"), ("Clicks", "0"), ("Keys", "0")]):
             cell = tk.Frame(stats_frame, bg=BG2)
             cell.grid(row=0, column=i, sticky="nsew", padx=4)
-            vl = tk.Label(cell, text=val, font=(FONT_FAMILY, 16, "bold"), fg=WHITE, bg=BG2)
+            vl = tk.Label(cell, text=val, font=("Segoe UI", 16, "bold"), fg=WHITE, bg=BG2)
             vl.pack()
-            tk.Label(cell, text=label_text, font=(FONT_FAMILY, 7), fg=TEXT2, bg=BG2).pack()
+            tk.Label(cell, text=label_text, font=("Segoe UI", 7), fg=TEXT2, bg=BG2).pack()
 
         self._captures_label = stats_frame.grid_slaves(row=0, column=0)[0].winfo_children()[0]
         self._activity_label_clicks = stats_frame.grid_slaves(row=0, column=1)[0].winfo_children()[0]
@@ -265,7 +248,7 @@ class TrackerGUI:
 
         dash_btn = tk.Button(
             btn_frame, text="🌐 Open Dashboard",
-            font=(FONT_FAMILY, 9), bg=BG3, fg=TEXT, relief="flat",
+            font=("Segoe UI", 9), bg=BG3, fg=TEXT, relief="flat",
             activebackground=PRIMARY, activeforeground=WHITE,
             cursor="hand2", padx=12, pady=6,
             command=self._open_dashboard,
@@ -273,7 +256,7 @@ class TrackerGUI:
         dash_btn.pack(fill="x", pady=(0, 4))
         self._checkout_btn = tk.Button(
             btn_frame, text="\u2713 Check Out",
-            font=(FONT_FAMILY, 9, "bold"), bg=SUCCESS, fg=WHITE, relief="flat",
+            font=("Segoe UI", 9, "bold"), bg=SUCCESS, fg=WHITE, relief="flat",
             activebackground="#16a34a", activeforeground=WHITE,
             cursor="hand2", padx=12, pady=6,
             command=self._show_checkout_dialog,
@@ -281,7 +264,7 @@ class TrackerGUI:
         # Hidden by default — shown when session is active
         hide_btn = tk.Button(
             btn_frame, text="▬ Minimize to Tray",
-            font=(FONT_FAMILY, 9), bg=BG3, fg=TEXT, relief="flat",
+            font=("Segoe UI", 9), bg=BG3, fg=TEXT, relief="flat",
             activebackground=BG2, activeforeground=TEXT,
             cursor="hand2", padx=12, pady=6,
             command=self._on_close_button,
@@ -290,7 +273,7 @@ class TrackerGUI:
 
         quit_btn = tk.Button(
             btn_frame, text="✕ Quit Tracker",
-            font=(FONT_FAMILY, 9), bg=ERROR, fg=WHITE, relief="flat",
+            font=("Segoe UI", 9), bg=ERROR, fg=WHITE, relief="flat",
             activebackground="#dc2626", activeforeground=WHITE,
             cursor="hand2", padx=12, pady=6,
             command=lambda: self._on_quit() if self._on_quit else self._do_quit(),
@@ -300,7 +283,7 @@ class TrackerGUI:
         # ── Footer ─────────────────────────────────────────────
         footer = tk.Label(
             self._root, text="Listening on http://127.0.0.1:59210",
-            font=(FONT_FAMILY, 7), fg=TEXT2, bg=BG,
+            font=("Segoe UI", 7), fg=TEXT2, bg=BG,
         )
         footer.pack(side="bottom", pady=(4, 8))
 
@@ -437,19 +420,19 @@ class TrackerGUI:
 
         tk.Label(
             dlg, text="Check Out Report",
-            font=(FONT_FAMILY, 12, "bold"), fg=WHITE, bg=BG,
+            font=("Segoe UI", 12, "bold"), fg=WHITE, bg=BG,
         ).pack(pady=(16, 4))
 
         tk.Label(
             dlg, text="What did you work on today?",
-            font=(FONT_FAMILY, 9), fg=TEXT2, bg=BG,
+            font=("Segoe UI", 9), fg=TEXT2, bg=BG,
         ).pack(pady=(0, 8))
 
         report_frame = tk.Frame(dlg, bg=BG3, padx=2, pady=2)
         report_frame.pack(fill="x", padx=16)
         report_text = tk.Text(
             report_frame, height=5, wrap="word",
-            font=(FONT_FAMILY, 9), bg=BG2, fg=WHITE,
+            font=("Segoe UI", 9), bg=BG2, fg=WHITE,
             insertbackground=WHITE, relief="flat",
             padx=8, pady=6,
         )
@@ -458,11 +441,11 @@ class TrackerGUI:
 
         tk.Label(
             dlg, text="Proof link (optional)",
-            font=(FONT_FAMILY, 8), fg=TEXT2, bg=BG, anchor="w",
+            font=("Segoe UI", 8), fg=TEXT2, bg=BG, anchor="w",
         ).pack(fill="x", padx=16, pady=(8, 2))
 
         proof_entry = tk.Entry(
-            dlg, font=(FONT_FAMILY, 9), bg=BG2, fg=WHITE,
+            dlg, font=("Segoe UI", 9), bg=BG2, fg=WHITE,
             insertbackground=WHITE, relief="flat",
         )
         proof_entry.pack(fill="x", padx=16)
@@ -475,7 +458,7 @@ class TrackerGUI:
             proof = proof_entry.get().strip()
             if not report:
                 tk.Label(
-                    dlg, text="Report is required!", font=(FONT_FAMILY, 8),
+                    dlg, text="Report is required!", font=("Segoe UI", 8),
                     fg=ERROR, bg=BG,
                 ).pack()
                 return
@@ -493,7 +476,7 @@ class TrackerGUI:
 
         tk.Button(
             btn_frame, text="Cancel",
-            font=(FONT_FAMILY, 9), bg=BG3, fg=TEXT, relief="flat",
+            font=("Segoe UI", 9), bg=BG3, fg=TEXT, relief="flat",
             activebackground=BG2, activeforeground=TEXT,
             cursor="hand2", padx=16, pady=4,
             command=_cancel,
@@ -501,7 +484,7 @@ class TrackerGUI:
 
         tk.Button(
             btn_frame, text="Submit & Check Out",
-            font=(FONT_FAMILY, 9, "bold"), bg=SUCCESS, fg=WHITE, relief="flat",
+            font=("Segoe UI", 9, "bold"), bg=SUCCESS, fg=WHITE, relief="flat",
             activebackground="#16a34a", activeforeground=WHITE,
             cursor="hand2", padx=16, pady=4,
             command=_do_checkout,
