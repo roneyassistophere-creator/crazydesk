@@ -344,6 +344,70 @@ def handle_status() -> dict:
     }
 
 
+def handle_break(data: dict) -> dict:
+    global is_on_break, break_start_ms
+    if not session_id:
+        return {"ok": False, "error": "No active session"}
+    if is_on_break:
+        return {"ok": True, "already": True}
+    try:
+        start_break(session_id)
+        is_on_break = True
+        break_start_ms = int(time.time() * 1000)
+        if _gui:
+            _gui.update_status("break")
+            _gui.update_session(
+                user_name=get_session().get("display_name", ""),
+                session_id=session_id,
+                check_in_ms=check_in_time_ms or 0,
+                total_break_sec=total_break_sec,
+                break_start_ms=break_start_ms,
+                is_on_break=True,
+            )
+        logger.info("Break started")
+        return {"ok": True}
+    except Exception as e:
+        logger.error("Start break failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+def handle_resume(data: dict) -> dict:
+    global is_on_break, break_start_ms, total_break_sec
+    if not session_id:
+        return {"ok": False, "error": "No active session"}
+    if not is_on_break:
+        return {"ok": True, "already": True}
+    try:
+        resume_work(session_id)
+        if break_start_ms:
+            total_break_sec += int((time.time() * 1000 - break_start_ms) / 1000)
+        is_on_break = False
+        break_start_ms = None
+        if _gui:
+            _gui.update_status("active")
+            _gui.update_session(
+                user_name=get_session().get("display_name", ""),
+                session_id=session_id,
+                check_in_ms=check_in_time_ms or 0,
+                total_break_sec=total_break_sec,
+                break_start_ms=0,
+                is_on_break=False,
+            )
+        logger.info("Break ended, total break: %ds", total_break_sec)
+        return {"ok": True}
+    except Exception as e:
+        logger.error("Resume work failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+def handle_gui_break():
+    """Called from the GUI break button (runs in background thread)."""
+    if is_on_break:
+        handle_resume({})
+    else:
+        handle_break({})
+
+
 # ── Main ───────────────────────────────────────────────────────
 
 def handle_gui_checkout(report: str, proof_link: str):
@@ -406,6 +470,8 @@ def main():
         on_refresh=handle_refresh,
         on_capture=handle_capture,
         on_checkout=handle_checkout,
+        on_break=handle_break,
+        on_resume=handle_resume,
         get_status=handle_status,
     )
 
@@ -434,6 +500,7 @@ def main():
         on_quit=_on_gui_quit,
         on_open_dashboard=lambda: webbrowser.open(WEB_APP_URL),
         on_checkout=handle_gui_checkout,
+        on_break=handle_gui_break,
     )
     _gui.run()  # blocks until window is destroyed
 

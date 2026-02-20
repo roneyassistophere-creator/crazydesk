@@ -401,19 +401,42 @@ export default function CheckInOutWidget({
     }
   }, [user, profile]);
 
-  // BREAK CONTROLS (browser sessions only)
+  // BREAK CONTROLS
   const handleStartBreak = useCallback(async () => {
-    if (!currentSessionId || sessionSource !== 'browser') return;
+    if (!currentSessionId) return;
     setLoading(true);
     setIsOnBreak(true); // optimistic
 
     try {
-      const ref = doc(db, 'work_logs', currentSessionId);
-      await updateDoc(ref, {
-        status: 'break',
-        breaks: arrayUnion({ startTime: Timestamp.now() }),
-      });
-      toast.success('Break started');
+      if (sessionSource === 'desktop') {
+        // Send break to Python tracker
+        try {
+          const res = await fetch(`${PYTHON_TRACKER_URL}/api/break`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || 'Break failed');
+          toast.success('Break started');
+        } catch (fetchErr) {
+          // Fallback to Firestore
+          console.warn('Tracker unreachable, starting break via Firestore:', fetchErr);
+          const ref = doc(db, 'work_logs', currentSessionId);
+          await updateDoc(ref, {
+            status: 'break',
+            breaks: arrayUnion({ startTime: Timestamp.now() }),
+          });
+          toast.success('Break started');
+        }
+      } else {
+        const ref = doc(db, 'work_logs', currentSessionId);
+        await updateDoc(ref, {
+          status: 'break',
+          breaks: arrayUnion({ startTime: Timestamp.now() }),
+        });
+        toast.success('Break started');
+      }
     } catch (err: any) {
       console.error('Start break error:', err);
       setIsOnBreak(false);
@@ -424,30 +447,68 @@ export default function CheckInOutWidget({
   }, [currentSessionId, sessionSource]);
 
   const handleEndBreak = useCallback(async () => {
-    if (!currentSessionId || sessionSource !== 'browser') return;
+    if (!currentSessionId) return;
     setLoading(true);
     setIsOnBreak(false); // optimistic
 
     try {
-      const ref = doc(db, 'work_logs', currentSessionId);
-      const snap = await getDocs(
-        query(collection(db, 'work_logs'), where('__name__', '==', currentSessionId)),
-      );
-      if (!snap.empty) {
-        const data = snap.docs[0].data();
-        const breaks = [...(data.breaks || [])];
-        if (breaks.length > 0 && !breaks[breaks.length - 1].endTime) {
-          const startT = breaks[breaks.length - 1].startTime?.toDate?.();
-          const endT = new Date();
-          breaks[breaks.length - 1] = {
-            ...breaks[breaks.length - 1],
-            endTime: Timestamp.now(),
-            durationMinutes: startT
-              ? Math.round((endT.getTime() - startT.getTime()) / 60000)
-              : 0,
-          };
-          await updateDoc(ref, { status: 'active', breaks });
+      if (sessionSource === 'desktop') {
+        // Send resume to Python tracker
+        try {
+          const res = await fetch(`${PYTHON_TRACKER_URL}/api/resume`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || 'Resume failed');
           toast.success('Break ended');
+        } catch (fetchErr) {
+          // Fallback to Firestore
+          console.warn('Tracker unreachable, ending break via Firestore:', fetchErr);
+          const ref = doc(db, 'work_logs', currentSessionId);
+          const snap = await getDocs(
+            query(collection(db, 'work_logs'), where('__name__', '==', currentSessionId)),
+          );
+          if (!snap.empty) {
+            const data = snap.docs[0].data();
+            const breaks = [...(data.breaks || [])];
+            if (breaks.length > 0 && !breaks[breaks.length - 1].endTime) {
+              const startT = breaks[breaks.length - 1].startTime?.toDate?.();
+              const endT = new Date();
+              breaks[breaks.length - 1] = {
+                ...breaks[breaks.length - 1],
+                endTime: Timestamp.now(),
+                durationMinutes: startT
+                  ? Math.round((endT.getTime() - startT.getTime()) / 60000)
+                  : 0,
+              };
+              await updateDoc(ref, { status: 'active', breaks });
+            }
+          }
+          toast.success('Break ended');
+        }
+      } else {
+        const ref = doc(db, 'work_logs', currentSessionId);
+        const snap = await getDocs(
+          query(collection(db, 'work_logs'), where('__name__', '==', currentSessionId)),
+        );
+        if (!snap.empty) {
+          const data = snap.docs[0].data();
+          const breaks = [...(data.breaks || [])];
+          if (breaks.length > 0 && !breaks[breaks.length - 1].endTime) {
+            const startT = breaks[breaks.length - 1].startTime?.toDate?.();
+            const endT = new Date();
+            breaks[breaks.length - 1] = {
+              ...breaks[breaks.length - 1],
+              endTime: Timestamp.now(),
+              durationMinutes: startT
+                ? Math.round((endT.getTime() - startT.getTime()) / 60000)
+                : 0,
+            };
+            await updateDoc(ref, { status: 'active', breaks });
+            toast.success('Break ended');
+          }
         }
       }
     } catch (err: any) {
@@ -772,16 +833,11 @@ export default function CheckInOutWidget({
         <div className="modal modal-open">
           <div className="modal-box max-w-sm">
             <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
-              <WindowsIcon className="w-5 h-5 text-primary" /> Windows Python Tracker
+              <WindowsIcon className="w-5 h-5 text-primary" /> Windows Tracker
             </h3>
             <p className="text-sm text-base-content/60 mb-4">
-              Make sure the Python Tracker is running, then click connect.
+              Make sure <strong>CrazyDeskTracker.exe</strong> is running, then click connect.
             </p>
-
-            <div className="bg-base-300 rounded-lg p-3 mb-4">
-              <div className="text-xs text-base-content/50 font-mono mb-1">Start the tracker:</div>
-              <code className="text-sm text-primary font-mono">cd python-tracker && python crazydesk_tracker.py</code>
-            </div>
 
             <div className="flex flex-col gap-3">
               <button
@@ -796,15 +852,6 @@ export default function CheckInOutWidget({
                 )}
                 Connect to Tracker
               </button>
-
-              <div className="divider text-xs text-base-content/40 my-0">SETUP</div>
-
-              <div className="text-xs text-base-content/50 space-y-1">
-                <p><strong>1.</strong> Install Python 3.11+</p>
-                <p><strong>2.</strong> <code className="bg-base-300 px-1 rounded">cd python-tracker && pip install -r requirements.txt</code></p>
-                <p><strong>3.</strong> <code className="bg-base-300 px-1 rounded">python crazydesk_tracker.py</code></p>
-                <p><strong>4.</strong> Click &quot;Connect to Tracker&quot; above</p>
-              </div>
             </div>
 
             <div className="modal-action mt-3">
@@ -1105,13 +1152,30 @@ export default function CheckInOutWidget({
                         </button>
                       </div>
                       <div className="flex gap-2 mt-1">
-                        {!isOnBreak && (
+                        {!isOnBreak ? (
+                          <>
+                            <button
+                              className="btn btn-warning btn-sm gap-1"
+                              onClick={handleStartBreak}
+                              disabled={loading}
+                            >
+                              <Coffee className="w-3.5 h-3.5" /> Break
+                            </button>
+                            <button
+                              className="btn btn-error btn-sm gap-1"
+                              onClick={handleCheckOut}
+                              disabled={loading}
+                            >
+                              <XCircle className="w-3.5 h-3.5" /> Check Out
+                            </button>
+                          </>
+                        ) : (
                           <button
-                            className="btn btn-error btn-sm gap-1"
-                            onClick={handleCheckOut}
+                            className="btn btn-success btn-sm gap-1"
+                            onClick={handleEndBreak}
                             disabled={loading}
                           >
-                            <XCircle className="w-3.5 h-3.5" /> Check Out
+                            <Play className="w-3.5 h-3.5" /> Resume Work
                           </button>
                         )}
                       </div>

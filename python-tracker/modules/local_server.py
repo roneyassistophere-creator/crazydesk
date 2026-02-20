@@ -29,6 +29,8 @@ _on_checkin = None
 _on_refresh = None
 _on_capture = None
 _on_checkout = None
+_on_break = None
+_on_resume = None
 _get_status = None
 
 _server: HTTPServer | None = None
@@ -40,13 +42,17 @@ def set_handlers(
     on_refresh=None,
     on_capture=None,
     on_checkout=None,
+    on_break=None,
+    on_resume=None,
     get_status=None,
 ):
-    global _on_checkin, _on_refresh, _on_capture, _on_checkout, _get_status
+    global _on_checkin, _on_refresh, _on_capture, _on_checkout, _on_break, _on_resume, _get_status
     _on_checkin = on_checkin
     _on_refresh = on_refresh
     _on_capture = on_capture
     _on_checkout = on_checkout
+    _on_break = on_break
+    _on_resume = on_resume
     _get_status = get_status
 
 
@@ -115,6 +121,14 @@ class _Handler(BaseHTTPRequestHandler):
 
         elif self.path == "/api/checkout":
             result = _on_checkout(data) if _on_checkout else {"ok": False}
+            self._json_response(200, result)
+
+        elif self.path == "/api/break":
+            result = _on_break(data) if _on_break else {"ok": False}
+            self._json_response(200, result)
+
+        elif self.path == "/api/resume":
+            result = _on_resume(data) if _on_resume else {"ok": False}
             self._json_response(200, result)
 
         else:

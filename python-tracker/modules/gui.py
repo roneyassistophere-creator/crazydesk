@@ -57,10 +57,11 @@ class TrackerGUI:
     All other interactions happen via thread-safe methods.
     """
 
-    def __init__(self, on_quit=None, on_open_dashboard=None, on_checkout=None):
+    def __init__(self, on_quit=None, on_open_dashboard=None, on_checkout=None, on_break=None):
         self._on_quit = on_quit
         self._on_open_dashboard = on_open_dashboard
         self._on_checkout = on_checkout
+        self._on_break = on_break
 
         self._status = "idle"       # idle | active | break
         self._user_name = ""
@@ -84,6 +85,7 @@ class TrackerGUI:
         self._dot_canvas: tk.Canvas | None = None
         self._conn_label: tk.Label | None = None
         self._checkout_btn: tk.Button | None = None
+        self._break_btn: tk.Button | None = None
 
     # ── Public thread-safe setters ─────────────────────────────
 
@@ -262,6 +264,16 @@ class TrackerGUI:
             command=self._show_checkout_dialog,
         )
         # Hidden by default — shown when session is active
+
+        self._break_btn = tk.Button(
+            btn_frame, text="\u2615 Take a Break",
+            font=("Segoe UI", 9), bg=WARNING, fg=BG, relief="flat",
+            activebackground="#ca8a04", activeforeground=BG,
+            cursor="hand2", padx=12, pady=6,
+            command=self._handle_break_toggle,
+        )
+        # Hidden by default — shown when session is active
+
         hide_btn = tk.Button(
             btn_frame, text="▬ Minimize to Tray",
             font=("Segoe UI", 9), bg=BG3, fg=TEXT, relief="flat",
@@ -349,6 +361,19 @@ class TrackerGUI:
             # Show checkout button
             if self._checkout_btn:
                 self._checkout_btn.pack(fill="x", pady=(0, 4))
+            # Show break/resume button
+            if self._break_btn:
+                if self._is_on_break:
+                    self._break_btn.config(
+                        text="▶ Resume Work", bg=SUCCESS, fg=WHITE,
+                        activebackground="#16a34a", activeforeground=WHITE,
+                    )
+                else:
+                    self._break_btn.config(
+                        text="☕ Take a Break", bg=WARNING, fg=BG,
+                        activebackground="#ca8a04", activeforeground=BG,
+                    )
+                self._break_btn.pack(fill="x", pady=(0, 4))
         elif self._connected:
             self._conn_label.config(text="✅ Connected", fg=SUCCESS)
         else:
@@ -358,9 +383,11 @@ class TrackerGUI:
                 text="Open web dashboard → Check In → Desktop → Windows", fg=TEXT2
             )
             self._timer_label.config(text="00:00:00")
-            # Hide checkout button
+            # Hide checkout and break buttons
             if self._checkout_btn:
                 self._checkout_btn.pack_forget()
+            if self._break_btn:
+                self._break_btn.pack_forget()
 
         self._refresh_stats()
 
@@ -390,6 +417,11 @@ class TrackerGUI:
             self._root.after(1000, self._tick_timer)
 
     # ── Actions ────────────────────────────────────────────────
+
+    def _handle_break_toggle(self):
+        """Toggle break/resume — runs the callback in a background thread."""
+        if self._on_break:
+            threading.Thread(target=self._on_break, daemon=True).start()
 
     def _show_window(self, *_args):
         if self._root:
