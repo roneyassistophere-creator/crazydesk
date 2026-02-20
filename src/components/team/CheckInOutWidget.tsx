@@ -55,8 +55,8 @@ export default function CheckInOutWidget({
   const [proofLink, setProofLink] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Modal flow: 0=hidden, 1=choose method, 2=choose platform (mac/win), 3=open mac app, 4=open win tracker
-  const [modalStep, setModalStep] = useState<0 | 1 | 2 | 3 | 4>(0);
+  // Modal flow: 0=hidden, 1=choose method, 2=choose platform (mac/win), 3=open mac app, 4=python tracker, 5=mac sub-choice
+  const [modalStep, setModalStep] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
   const [waitingForDesktop, setWaitingForDesktop] = useState(false);
   const [isStaleDesktop, setIsStaleDesktop] = useState(false);
   const [waitingForPythonTracker, setWaitingForPythonTracker] = useState(false);
@@ -278,13 +278,18 @@ export default function CheckInOutWidget({
     setModalStep(2);
   }, []);
 
-  // macOS desktop: show step 3 (deep link)
+  // macOS desktop: show step 5 (sub-choice: Electron or Python)
   const handleMacDesktop = useCallback(() => {
-    setModalStep(3);
+    setModalStep(5);
   }, []);
 
   // Windows desktop: show step 4 (Python tracker)
   const handleWindowsDesktop = useCallback(() => {
+    setModalStep(4);
+  }, []);
+
+  // macOS Python tracker: show step 4 (same Python tracker connection)
+  const handleMacPythonTracker = useCallback(() => {
     setModalStep(4);
   }, []);
 
@@ -678,7 +683,7 @@ export default function CheckInOutWidget({
             </p>
 
             <div className="flex flex-col gap-3">
-              {/* macOS — Electron desktop app via deep link */}
+              {/* macOS — sub-choice */}
               <button
                 className="btn btn-outline btn-block gap-3 justify-start text-left h-auto py-4"
                 onClick={handleMacDesktop}
@@ -686,7 +691,7 @@ export default function CheckInOutWidget({
                 <AppleIcon className="w-5 h-5 shrink-0" />
                 <div>
                   <div className="font-bold text-sm">macOS</div>
-                  <div className="text-xs opacity-70 font-normal">CrazyDesk Desktop App (Electron)</div>
+                  <div className="text-xs opacity-70 font-normal">Electron App or Python Tracker</div>
                 </div>
               </button>
 
@@ -767,20 +772,21 @@ export default function CheckInOutWidget({
         </div>
       )}
 
-      {/* ═══ STEP 4: Connect Windows Python Tracker ═══ */}
+      {/* ═══ STEP 4: Connect Python Tracker (shared by Windows & macOS) ═══ */}
       {modalStep === 4 && (
         <div className="modal modal-open">
           <div className="modal-box max-w-sm">
             <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
-              <WindowsIcon className="w-5 h-5 text-primary" /> Windows Python Tracker
+              <Monitor className="w-5 h-5 text-primary" /> CrazyDesk Python Tracker
             </h3>
             <p className="text-sm text-base-content/60 mb-4">
               Make sure the Python Tracker is running, then click connect.
             </p>
 
             <div className="bg-base-300 rounded-lg p-3 mb-4">
-              <div className="text-xs text-base-content/50 font-mono mb-1">Start the tracker:</div>
-              <code className="text-sm text-primary font-mono">cd python-tracker && python crazydesk_tracker.py</code>
+              <div className="text-xs text-base-content/50 font-mono mb-1">Run the tracker:</div>
+              <code className="text-sm text-primary font-mono">CrazyDeskTracker.exe</code>
+              <div className="text-xs text-base-content/40 mt-1">or: <code className="bg-base-300 px-1 rounded">python crazydesk_tracker.py</code></div>
             </div>
 
             <div className="flex flex-col gap-3">
@@ -797,14 +803,63 @@ export default function CheckInOutWidget({
                 Connect to Tracker
               </button>
 
-              <div className="divider text-xs text-base-content/40 my-0">SETUP</div>
+              <div className="divider text-xs text-base-content/40 my-0">FIRST TIME SETUP</div>
 
               <div className="text-xs text-base-content/50 space-y-1">
-                <p><strong>1.</strong> Install Python 3.11+</p>
-                <p><strong>2.</strong> <code className="bg-base-300 px-1 rounded">cd python-tracker && pip install -r requirements.txt</code></p>
-                <p><strong>3.</strong> <code className="bg-base-300 px-1 rounded">python crazydesk_tracker.py</code></p>
-                <p><strong>4.</strong> Click &quot;Connect to Tracker&quot; above</p>
+                <p><strong>Windows:</strong> Download &amp; run <code className="bg-base-300 px-1 rounded">CrazyDeskTracker.exe</code></p>
+                <p><strong>macOS:</strong> Download &amp; run <code className="bg-base-300 px-1 rounded">CrazyDeskTracker.app</code></p>
+                <p className="text-base-content/40 pt-1">Or run from source: <code className="bg-base-300 px-1 rounded">pip install -r requirements.txt && python crazydesk_tracker.py</code></p>
               </div>
+            </div>
+
+            <div className="modal-action mt-3">
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(2)}>
+                ← Back
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setModalStep(0)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setModalStep(0)} />
+        </div>
+      )}
+
+      {/* ═══ STEP 5: macOS Sub-Choice (Electron App or Python Tracker) ═══ */}
+      {modalStep === 5 && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
+              <AppleIcon className="w-5 h-5 text-primary" /> macOS Tracker
+            </h3>
+            <p className="text-sm text-base-content/60 mb-4">
+              Choose how you want to track on macOS.
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {/* Electron App */}
+              <button
+                className="btn btn-outline btn-block gap-3 justify-start text-left h-auto py-4"
+                onClick={() => setModalStep(3)}
+              >
+                <ExternalLink className="w-5 h-5 shrink-0" />
+                <div>
+                  <div className="font-bold text-sm">CrazyDesk App (Electron)</div>
+                  <div className="text-xs opacity-70 font-normal">Native app with deep link integration</div>
+                </div>
+              </button>
+
+              {/* Python Tracker */}
+              <button
+                className="btn btn-outline btn-block gap-3 justify-start text-left h-auto py-4"
+                onClick={handleMacPythonTracker}
+              >
+                <Monitor className="w-5 h-5 shrink-0" />
+                <div>
+                  <div className="font-bold text-sm">Python Tracker</div>
+                  <div className="text-xs opacity-70 font-normal">Lightweight tracker with screen &amp; camera capture</div>
+                </div>
+              </button>
             </div>
 
             <div className="modal-action mt-3">
