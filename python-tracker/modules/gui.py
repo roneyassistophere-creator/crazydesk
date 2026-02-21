@@ -148,7 +148,7 @@ class TrackerGUI:
         self._root = tk.Tk()
         self._root.title("CrazyDesk Tracker")
         self._root.configure(bg=BG)
-        self._root.geometry("340x420")
+        self._root.geometry("340x480")
         self._root.resizable(False, False)
         self._root.protocol("WM_DELETE_WINDOW", self._on_close_button)
 
@@ -245,8 +245,8 @@ class TrackerGUI:
         self._activity_label_keys = stats_frame.grid_slaves(row=0, column=2)[0].winfo_children()[0]
 
         # ── Buttons ────────────────────────────────────────────
-        btn_frame = tk.Frame(self._root, bg=BG, padx=12, pady=4)
-        btn_frame.pack(fill="x")
+        btn_frame = tk.Frame(self._root, bg=BG, padx=12, pady=8)
+        btn_frame.pack(fill="x", expand=True)
 
         dash_btn = tk.Button(
             btn_frame, text="🌐 Open Dashboard",
@@ -297,7 +297,7 @@ class TrackerGUI:
             self._root, text="Listening on http://127.0.0.1:59210",
             font=("Segoe UI", 7), fg=TEXT2, bg=BG,
         )
-        footer.pack(side="bottom", pady=(4, 8))
+        footer.pack(side="bottom", pady=(4, 12))
 
     # ── Tray icon ──────────────────────────────────────────────
 

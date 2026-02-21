@@ -79,7 +79,7 @@ _heartbeat_thread: threading.Thread | None = None
 _shutdown_event = threading.Event()
 _gui: TrackerGUI | None = None
 
-WEB_APP_URL = "http://localhost:3000"
+WEB_APP_URL = "https://crazydesk.vercel.app/dashboard"
 
 
 # ── Heartbeat ──────────────────────────────────────────────────
