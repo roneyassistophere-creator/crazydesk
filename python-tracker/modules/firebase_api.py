@@ -83,7 +83,11 @@ def _from_firestore(val: dict):
     if "nullValue" in val:
         return None
     if "timestampValue" in val:
-        return val["timestampValue"]
+        ts_str = val["timestampValue"]
+        try:
+            return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return ts_str
     if "arrayValue" in val:
         return [_from_firestore(v) for v in val.get("arrayValue", {}).get("values", [])]
     if "mapValue" in val:

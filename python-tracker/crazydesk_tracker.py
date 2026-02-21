@@ -82,6 +82,21 @@ _gui: TrackerGUI | None = None
 WEB_APP_URL = "https://crazydesk.vercel.app/dashboard"
 
 
+def _to_epoch_ms(val) -> int:
+    """Convert any timestamp representation (datetime, str, number) to epoch ms."""
+    if isinstance(val, datetime):
+        return int(val.timestamp() * 1000)
+    if isinstance(val, str):
+        try:
+            return int(datetime.fromisoformat(val.replace("Z", "+00:00")).timestamp() * 1000)
+        except (ValueError, AttributeError):
+            return int(time.time() * 1000)
+    if isinstance(val, (int, float)):
+        # Already ms if > 1e12, otherwise assume seconds
+        return int(val) if val > 1e12 else int(val * 1000)
+    return int(time.time() * 1000)
+
+
 # ── Heartbeat ──────────────────────────────────────────────────
 
 def _heartbeat_loop():
@@ -209,13 +224,8 @@ def handle_checkin(data: dict) -> dict:
         existing = get_active_session()
         if existing:
             session_id = existing["_id"]
-            ci_time = existing.get("checkInTime", "")
-            if isinstance(ci_time, str):
-                check_in_time_ms = int(
-                    datetime.fromisoformat(ci_time.replace("Z", "+00:00")).timestamp() * 1000
-                )
-            else:
-                check_in_time_ms = int(ci_time * 1000) if ci_time else int(time.time() * 1000)
+            ci_time = existing.get("checkInTime")
+            check_in_time_ms = _to_epoch_ms(ci_time) if ci_time else int(time.time() * 1000)
 
             is_on_break = existing.get("status") == "break"
             total_break_sec = 0
@@ -223,26 +233,16 @@ def handle_checkin(data: dict) -> dict:
 
             for b in existing.get("breaks", []) or []:
                 if b.get("endTime"):
-                    s = b["startTime"]
-                    e = b["endTime"]
-                    if isinstance(s, str):
-                        s = datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000
-                    if isinstance(e, str):
-                        e = datetime.fromisoformat(e.replace("Z", "+00:00")).timestamp() * 1000
-                    total_break_sec += int((e - s) / 1000)
+                    s_ms = _to_epoch_ms(b["startTime"])
+                    e_ms = _to_epoch_ms(b["endTime"])
+                    total_break_sec += max(0, int((e_ms - s_ms) / 1000))
 
             if is_on_break:
                 breaks = existing.get("breaks", []) or []
                 if breaks:
                     last = breaks[-1]
                     if not last.get("endTime"):
-                        s = last["startTime"]
-                        if isinstance(s, str):
-                            break_start_ms = int(
-                                datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000
-                            )
-                        else:
-                            break_start_ms = int(s * 1000)
+                        break_start_ms = _to_epoch_ms(last["startTime"])
                 if _gui:
                     _gui.update_status("break")
             else:
@@ -282,7 +282,7 @@ def handle_refresh(data: dict) -> dict:
 def handle_capture(data: dict) -> dict:
     global capture_count
     try:
-        result = perform_capture("remote")
+        result = perform_capture("manual")
         capture_count += 1
         if _gui:
             clicks, keys = get_counts()

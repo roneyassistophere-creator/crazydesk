@@ -246,7 +246,7 @@ def _remote_poll_loop():
                 for cmd in commands:
                     cmd_id = cmd.get("_id")
                     logger.info("Executing remote capture command: %s", cmd_id)
-                    result = perform_capture("remote")
+                    result = perform_capture("manual")
                     if _remote_callback:
                         _remote_callback(result)
                     if cmd_id:

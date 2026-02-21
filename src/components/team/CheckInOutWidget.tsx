@@ -48,6 +48,7 @@ export default function CheckInOutWidget({
   const [checkInTime, setCheckInTime] = useState<Date | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [totalBreakSeconds, setTotalBreakSeconds] = useState(0);
+  const [breakStartMs, setBreakStartMs] = useState<number | null>(null);
 
   // UI state
   const [showReportModal, setShowReportModal] = useState(false);
@@ -102,6 +103,7 @@ export default function CheckInOutWidget({
         setCheckInTime(null);
         setElapsedTime(0);
         setTotalBreakSeconds(0);
+        setBreakStartMs(null);
         setWaitingForDesktop(false);
         setIsStaleDesktop(false);
         lastHeartbeatRef.current = null;
@@ -130,7 +132,10 @@ export default function CheckInOutWidget({
       onStatusChange?.(true);
 
       const ciTime = data.checkInTime?.toDate?.() ?? new Date();
-      setCheckInTime(ciTime);
+      setCheckInTime(prev => {
+        if (prev && prev.getTime() === ciTime.getTime()) return prev;
+        return ciTime;
+      });
 
       // Track heartbeat for desktop sessions
       if (source === 'desktop') {
@@ -155,14 +160,19 @@ export default function CheckInOutWidget({
       setIsOnBreak(onBreak);
 
       let totalBrk = 0;
+      let currentBreakStart: number | null = null;
       for (const b of breaks) {
         if (b.endTime) {
           const s = b.startTime?.toDate?.()?.getTime() ?? 0;
           const e = b.endTime?.toDate?.()?.getTime() ?? 0;
           totalBrk += Math.max(0, (e - s) / 1000);
+        } else if (onBreak) {
+          // Open break — capture the start time so we can subtract it live
+          currentBreakStart = b.startTime?.toDate?.()?.getTime() ?? null;
         }
       }
       setTotalBreakSeconds(Math.floor(totalBrk));
+      setBreakStartMs(currentBreakStart);
     }, (error) => {
       console.error('CheckInOutWidget onSnapshot error:', error);
     });
@@ -249,6 +259,7 @@ export default function CheckInOutWidget({
     setSessionSource('browser');
     setIsOnBreak(false);
     setTotalBreakSeconds(0);
+    setBreakStartMs(null);
 
     try {
       const docRef = await addDoc(collection(db, 'work_logs'), {
@@ -527,7 +538,8 @@ export default function CheckInOutWidget({
     try {
       const now = new Date();
       const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
-      const breakMin = Math.round(totalBreakSeconds / 60);
+      const curBreak = (isOnBreak && breakStartMs) ? Math.floor((Date.now() - breakStartMs) / 1000) : 0;
+      const breakMin = Math.round((totalBreakSeconds + curBreak) / 60);
 
       const ref = doc(db, 'work_logs', currentSessionId);
       await updateDoc(ref, {
@@ -548,6 +560,7 @@ export default function CheckInOutWidget({
       setCheckInTime(null);
       setElapsedTime(0);
       setTotalBreakSeconds(0);
+      setBreakStartMs(null);
       setIsStaleDesktop(false);
       toast.success('Stale desktop session closed');
     } catch (err: any) {
@@ -556,7 +569,7 @@ export default function CheckInOutWidget({
     } finally {
       setLoading(false);
     }
-  }, [currentSessionId, checkInTime, totalBreakSeconds]);
+  }, [currentSessionId, checkInTime, totalBreakSeconds, isOnBreak, breakStartMs]);
 
   // MANUAL SYNC — re-read the session from Firestore
   const handleSync = useCallback(async () => {
@@ -576,6 +589,7 @@ export default function CheckInOutWidget({
           setCheckInTime(null);
           setElapsedTime(0);
           setTotalBreakSeconds(0);
+          setBreakStartMs(null);
           setIsStaleDesktop(false);
           toast.success('Session already completed — synced!');
         } else {
@@ -619,7 +633,8 @@ export default function CheckInOutWidget({
           console.warn('Python tracker unreachable, checking out via Firestore directly:', fetchErr);
           const now = new Date();
           const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
-          const breakMin = Math.round(totalBreakSeconds / 60);
+          const curBreak = (isOnBreak && breakStartMs) ? Math.floor((Date.now() - breakStartMs) / 1000) : 0;
+          const breakMin = Math.round((totalBreakSeconds + curBreak) / 60);
           const ref = doc(db, 'work_logs', currentSessionId);
           await updateDoc(ref, {
             checkOutTime: serverTimestamp(),
@@ -634,7 +649,8 @@ export default function CheckInOutWidget({
         // Browser session — update Firestore directly
         const now = new Date();
         const totalMin = Math.round((now.getTime() - checkInTime.getTime()) / 60000);
-        const breakMin = Math.round(totalBreakSeconds / 60);
+        const curBreak = (isOnBreak && breakStartMs) ? Math.floor((Date.now() - breakStartMs) / 1000) : 0;
+        const breakMin = Math.round((totalBreakSeconds + curBreak) / 60);
         const ref = doc(db, 'work_logs', currentSessionId);
         await updateDoc(ref, {
           checkOutTime: serverTimestamp(),
@@ -654,6 +670,7 @@ export default function CheckInOutWidget({
       setCheckInTime(null);
       setElapsedTime(0);
       setTotalBreakSeconds(0);
+      setBreakStartMs(null);
       setShowReportModal(false);
       setReportText('');
       setProofLink('');
@@ -664,12 +681,15 @@ export default function CheckInOutWidget({
     } finally {
       setLoading(false);
     }
-  }, [currentSessionId, checkInTime, totalBreakSeconds, reportText, proofLink, sessionSource]);
+  }, [currentSessionId, checkInTime, totalBreakSeconds, isOnBreak, breakStartMs, reportText, proofLink, sessionSource]);
 
   // RENDER
   if (!user) return null;
 
-  const workSeconds = Math.max(0, elapsedTime - totalBreakSeconds);
+  // Compute current ongoing break duration (updates each render triggered by timer tick)
+  const currentBreakSec = (isOnBreak && breakStartMs) ? Math.floor((Date.now() - breakStartMs) / 1000) : 0;
+  const effectiveBreakSeconds = totalBreakSeconds + currentBreakSec;
+  const workSeconds = Math.max(0, elapsedTime - effectiveBreakSeconds);
 
   // Modals renderer (shared by compact and full)
   const renderModals = () => (
@@ -852,6 +872,16 @@ export default function CheckInOutWidget({
                 )}
                 Connect to Tracker
               </button>
+
+              <div className="divider text-xs text-base-content/40 my-0">OR</div>
+
+              <a
+                href="/downloads/CrazyDeskTracker.exe"
+                download="CrazyDeskTracker.exe"
+                className="btn btn-ghost btn-sm gap-2"
+              >
+                <Download className="w-4 h-4" /> Download Windows Tracker
+              </a>
             </div>
 
             <div className="modal-action mt-3">
@@ -883,7 +913,7 @@ export default function CheckInOutWidget({
                 </div>
                 <div className="stat py-2 px-3">
                   <div className="stat-title text-xs">Breaks</div>
-                  <div className="stat-value text-lg">{fmt(totalBreakSeconds)}</div>
+                  <div className="stat-value text-lg">{fmt(effectiveBreakSeconds)}</div>
                 </div>
               </div>
 
@@ -1063,17 +1093,28 @@ export default function CheckInOutWidget({
             <div className="flex flex-col gap-3">
               {/* Timer */}
               <div className="text-center">
-                <div className="text-3xl font-mono font-bold text-primary">
-                  {fmt(workSeconds)}
-                </div>
-                <div className="text-xs text-base-content/50 mt-1">
-                  Total: {fmt(elapsedTime)} · Breaks: {fmt(totalBreakSeconds)}
-                </div>
-                {isOnBreak && (
-                  <span className="badge badge-warning badge-sm mt-2 gap-1">
-                    <Coffee className="w-3 h-3" /> On Break
-                  </span>
+                {isOnBreak ? (
+                  <>
+                    <div className="text-sm font-mono text-base-content/40 mb-1">
+                      Work: {fmt(workSeconds)}
+                    </div>
+                    <div className="text-3xl font-mono font-bold text-warning animate-pulse">
+                      {fmt(currentBreakSec)}
+                    </div>
+                    <span className="badge badge-warning badge-sm mt-2 gap-1">
+                      <Coffee className="w-3 h-3" /> On Break
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-3xl font-mono font-bold text-primary">
+                      {fmt(workSeconds)}
+                    </div>
+                  </>
                 )}
+                <div className="text-xs text-base-content/50 mt-1">
+                  Total: {fmt(elapsedTime)} · Breaks: {fmt(effectiveBreakSeconds)}
+                </div>
               </div>
 
               {/* Browser session controls */}

@@ -38,7 +38,7 @@ interface TrackerLog {
   timestamp: any;
   screenshotUrl?: string;
   cameraImageUrl?: string;
-  type: 'auto' | 'manual' | 'flagged';
+  type: 'auto' | 'manual' | 'remote' | 'flagged';
   flagged?: boolean;
   flagReason?: string;
   source?: 'desktop' | 'browser';
@@ -251,7 +251,7 @@ export default function WebTrackerPage() {
 
   // ── Activity tracking (browser-side: clicks + keystrokes) ───
   useEffect(() => {
-    if (!trackingActive || !user) return;
+    if (!trackingActive || !user || usingDesktopApp) return;
     const click = () => { activityRef.current.mouseClicks++; activityRef.current.lastActive = new Date(); };
     const key = () => { activityRef.current.keystrokes++; activityRef.current.lastActive = new Date(); };
     const move = () => { activityRef.current.lastActive = new Date(); };
@@ -281,7 +281,38 @@ export default function WebTrackerPage() {
       if (flushRef.current) clearInterval(flushRef.current);
       clearInterval(ui);
     };
-  }, [trackingActive, user, profile]);
+  }, [trackingActive, user, profile, usingDesktopApp]);
+
+  // ── Activity stats from Firestore (for desktop-app users) ───
+  useEffect(() => {
+    if (!trackingActive || !user || !usingDesktopApp) return;
+    const targetUid = (isManagerOrAdmin && selectedUser !== 'ALL') ? selectedUser : user.uid;
+    // Query activity_logs for today from the desktop app
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const q = query(
+      collection(db, 'activity_logs'),
+      where('userId', '==', targetUid),
+      where('timestamp', '>=', Timestamp.fromDate(todayStart)),
+      orderBy('timestamp', 'desc'),
+    );
+    const unsub = onSnapshot(q, snap => {
+      let totalClicks = 0;
+      let totalKeys = 0;
+      let latest: Date | null = null;
+      snap.docs.forEach(d => {
+        const data = d.data();
+        totalClicks += data.mouseClicks || 0;
+        totalKeys += data.keystrokes || 0;
+        const ts = data.lastActive?.toDate?.() || data.timestamp?.toDate?.();
+        if (ts && (!latest || ts > latest)) latest = ts;
+      });
+      setActivityStats({ mouseClicks: totalClicks, keystrokes: totalKeys, lastActive: latest });
+    }, err => {
+      console.error('Desktop activity_logs listener error:', err);
+    });
+    return () => unsub();
+  }, [trackingActive, user, usingDesktopApp, isManagerOrAdmin, selectedUser]);
 
   // ── Delete helpers ──────────────────────────────────────────
   const deleteLogFiles = async (log: TrackerLog) => {
@@ -525,8 +556,8 @@ export default function WebTrackerPage() {
                 {log.timestamp?.toDate?.() ? formatTime12h(log.timestamp.toDate()) : ''}
               </div>
 
-              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : log.type === 'manual' ? 'badge-info text-white' : 'badge-ghost'}`}>
-                {log.flagged ? 'FLAGGED' : log.type === 'manual' ? 'Manual' : 'Auto'}
+              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : (log.type === 'manual' || log.type === 'remote') ? 'badge-info text-white' : 'badge-ghost'}`}>
+                {log.flagged ? 'FLAGGED' : (log.type === 'manual' || log.type === 'remote') ? 'Manual' : 'Auto'}
               </div>
 
               {isManagerOrAdmin && (
@@ -588,8 +619,8 @@ export default function WebTrackerPage() {
                 <span className="text-sm opacity-70">
                   {lightboxLog.timestamp?.toDate?.()?.toLocaleDateString()} at {lightboxLog.timestamp?.toDate?.() ? formatTime12h(lightboxLog.timestamp.toDate()) : ''}
                 </span>
-                <span className={`badge badge-sm ${lightboxLog.type === 'manual' ? 'badge-info' : 'badge-ghost'}`}>
-                  {lightboxLog.type === 'manual' ? 'Manual' : 'Auto'}
+                <span className={`badge badge-sm ${(lightboxLog.type === 'manual' || lightboxLog.type === 'remote') ? 'badge-info' : 'badge-ghost'}`}>
+                  {(lightboxLog.type === 'manual' || lightboxLog.type === 'remote') ? 'Manual' : 'Auto'}
                 </span>
               </div>
 

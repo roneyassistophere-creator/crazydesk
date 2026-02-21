@@ -8,6 +8,7 @@ Flushes counts to Firestore every 5 minutes.
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 
 from pynput import mouse, keyboard
 
@@ -71,7 +72,8 @@ def flush_activity():
             "userDisplayName": session["display_name"],
             "mouseClicks": clicks,
             "keystrokes": keys,
-            "lastActive": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "lastActive": datetime.now(timezone.utc),
+            "source": "desktop",
         })
         logger.info("Activity flushed: %d clicks, %d keystrokes", clicks, keys)
     except Exception as e:
