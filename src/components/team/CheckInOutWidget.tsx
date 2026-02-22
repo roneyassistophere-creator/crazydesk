@@ -609,6 +609,50 @@ export default function CheckInOutWidget({
     }
   }, [currentSessionId]);
 
+  // RECONNECT — re-send deep link to desktop app to restore connection
+  const handleReconnectDesktop = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken(true);
+      if (token) {
+        const params = new URLSearchParams({
+          token,
+          uid: user.uid,
+          name: user.displayName || profile?.displayName || 'User',
+          email: user.email || '',
+          photo: user.photoURL || '',
+        });
+        openDeepLink(`crazydesk://checkin?${params.toString()}`);
+
+        // Restart token refresh interval
+        if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
+        tokenRefreshRef.current = setInterval(async () => {
+          try {
+            const freshToken = await auth.currentUser?.getIdToken(true);
+            if (freshToken) {
+              openDeepLink(`crazydesk://refresh?token=${encodeURIComponent(freshToken)}`);
+            }
+          } catch (e) {
+            console.warn('Token refresh failed:', e);
+          }
+        }, 50 * 60 * 1000);
+
+        toast.success('Reconnect signal sent to desktop app');
+        // Give the desktop app time to reconnect and update heartbeat
+        setTimeout(() => {
+          setIsStaleDesktop(false);
+          setLoading(false);
+        }, 5000);
+        return;
+      }
+    } catch (err) {
+      console.error('Reconnect error:', err);
+      toast.error('Failed to reconnect');
+    }
+    setLoading(false);
+  }, [user, profile, openDeepLink]);
+
   // CHECK-OUT — opens report modal (works for both browser and desktop sessions)
   const handleCheckOut = useCallback(() => {
     setShowReportModal(true);
@@ -826,13 +870,17 @@ export default function CheckInOutWidget({
               <div className="divider text-xs text-base-content/40 my-0">OR</div>
 
               <a
-                href="https://github.com/roneyassistophere-creator/crazydesk/releases"
-                target="_blank"
-                rel="noopener noreferrer"
+                href="/downloads/CrazyDeskTracker.zip"
+                download="CrazyDeskTracker.zip"
                 className="btn btn-ghost btn-sm gap-2"
               >
                 <Download className="w-4 h-4" /> Download macOS App
               </a>
+
+              <p className="text-xs text-base-content/40 text-center mt-1">
+                After extracting, if macOS says the app is damaged, open Terminal and run:<br />
+                <code className="text-primary/80 select-all">xattr -cr &quot;CrazyDesk Tracker.app&quot;</code>
+              </p>
             </div>
 
             <div className="modal-action mt-3">
@@ -996,14 +1044,28 @@ export default function CheckInOutWidget({
                 <span className="badge badge-info badge-xs">Desktop</span>
               )}
               {isStaleDesktop && (
-                <button
-                  className="badge badge-error badge-xs gap-1 cursor-pointer hover:brightness-110"
-                  onClick={handleForceCloseDesktop}
-                  disabled={loading}
-                  title="Desktop app offline — click to force close"
-                >
-                  <AlertTriangle className="w-2.5 h-2.5" /> Stale
-                </button>
+                <div className="dropdown dropdown-end">
+                  <button
+                    tabIndex={0}
+                    className="badge badge-error badge-xs gap-1 cursor-pointer hover:brightness-110"
+                    disabled={loading}
+                    title="Desktop app offline — click for options"
+                  >
+                    <AlertTriangle className="w-2.5 h-2.5" /> Stale
+                  </button>
+                  <ul tabIndex={0} className="dropdown-content z-50 menu menu-xs p-1 shadow bg-base-200 rounded-box w-32">
+                    <li>
+                      <button onClick={handleReconnectDesktop} disabled={loading} className="text-info text-xs">
+                        <RefreshCw className="w-3 h-3" /> Reconnect
+                      </button>
+                    </li>
+                    <li>
+                      <button onClick={handleForceCloseDesktop} disabled={loading} className="text-error text-xs">
+                        <XCircle className="w-3 h-3" /> Force Close
+                      </button>
+                    </li>
+                  </ul>
+                </div>
               )}
               {isOnBreak && <span className="badge badge-warning badge-xs">Break</span>}
             </>
@@ -1159,6 +1221,14 @@ export default function CheckInOutWidget({
                         Desktop app appears offline
                       </div>
                       <div className="flex gap-2">
+                        <button
+                          className="btn btn-info btn-xs gap-1"
+                          onClick={handleReconnectDesktop}
+                          disabled={loading}
+                        >
+                          {loading ? <span className="loading loading-spinner loading-xs" /> : <RefreshCw className="w-3 h-3" />}
+                          Reconnect
+                        </button>
                         <button
                           className="btn btn-warning btn-xs gap-1"
                           onClick={handleForceCloseDesktop}

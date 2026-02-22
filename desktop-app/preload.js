@@ -32,4 +32,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // App info
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+
+  // ─── NEW: Capture countdown notification ────────────────────
+
+  // Play notification sound (tung/tink beep)
+  playNotificationSound: () => ipcRenderer.send('play-notification-sound'),
 });

@@ -130,6 +130,18 @@ function createWindow() {
     show: false,
   });
 
+  // ─── Auto-grant camera & microphone permissions (no repeated prompts) ──
+  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+    const allowedPermissions = ['media', 'camera', 'microphone', 'display-capture', 'screen'];
+    console.log(`[Permission] Requested: ${permission} → ${allowedPermissions.includes(permission) ? 'GRANTED' : 'DENIED'}`);
+    callback(allowedPermissions.includes(permission));
+  });
+
+  mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission) => {
+    const allowedPermissions = ['media', 'camera', 'microphone', 'display-capture', 'screen'];
+    return allowedPermissions.includes(permission);
+  });
+
   // Load via custom 'app://' protocol for correct MIME types (fixes ES modules on Windows)
   mainWindow.loadURL('app://crazydesk/renderer/index.html');
 
@@ -294,7 +306,7 @@ ipcMain.on('sync-session-state', (_ev, state) => {
   console.log('[Main] Session state synced:', state ? `session=${state.sessionId}` : 'cleared');
 });
 
-// Screen capture — SILENT, with macOS permission handling
+// Screen capture — SILENT, with macOS permission handling + retry logic
 ipcMain.handle('capture-screen', async () => {
   try {
     // Check macOS screen recording permission (Windows doesn't need this)
@@ -308,29 +320,46 @@ ipcMain.handle('capture-screen', async () => {
       }
     }
 
-    const sources = await desktopCapturer.getSources({
-      types: ['screen'],
-      thumbnailSize: { width: 1920, height: 1080 },
-    });
-    console.log('[Capture] desktopCapturer sources:', sources.length);
-    if (!sources.length) {
-      console.warn('[Capture] No screen sources found');
-      return null;
+    // Try capture with retries (sometimes first attempt returns empty on macOS)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 1920, height: 1080 },
+      });
+      console.log(`[Capture] Attempt ${attempt}: desktopCapturer sources: ${sources.length}`);
+      if (!sources.length) {
+        console.warn(`[Capture] Attempt ${attempt}: No screen sources found`);
+        if (attempt < 3) { await new Promise(r => setTimeout(r, 500)); continue; }
+        return null;
+      }
+
+      // Try all sources — sometimes the primary screen isn't the first one
+      for (const source of sources) {
+        const thumb = source.thumbnail;
+        const size = thumb.getSize();
+        console.log(`[Capture] Source "${source.name}" thumbnail: ${size.width}x${size.height}`);
+        if (size.width > 0 && size.height > 0) {
+          const jpeg = thumb.toJPEG(80);
+          if (jpeg.length > 500) { // Valid JPEG should be > 500 bytes
+            console.log(`[Capture] Screenshot JPEG from "${source.name}": ${jpeg.length} bytes`);
+            return jpeg;
+          }
+        }
+      }
+
+      console.warn(`[Capture] Attempt ${attempt}: All thumbnails empty`);
+      if (attempt < 3) { await new Promise(r => setTimeout(r, 800)); }
     }
-    const thumb = sources[0].thumbnail;
-    const size = thumb.getSize();
-    console.log(`[Capture] Screen thumbnail size: ${size.width}x${size.height}`);
-    if (size.width === 0 || size.height === 0) {
-      console.warn('[Capture] Screen thumbnail is empty — permission likely denied');
-      if (isMac) {
+
+    console.warn('[Capture] All 3 attempts failed — thumbnail empty');
+    if (isMac) {
+      const status = systemPreferences.getMediaAccessStatus('screen');
+      if (status !== 'granted') {
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
         return { permissionNeeded: true };
       }
-      return null;
     }
-    const jpeg = thumb.toJPEG(80);
-    console.log(`[Capture] Screenshot JPEG size: ${jpeg.length} bytes`);
-    return jpeg;
+    return null;
   } catch (e) {
     console.error('[Capture] Screen capture error:', e);
     return null;
@@ -352,6 +381,23 @@ ipcMain.handle('get-app-info', () => ({
   version: app.getVersion(),
   platform: process.platform,
 }));
+
+// Play notification sound (system beep or custom sound)
+ipcMain.on('play-notification-sound', () => {
+  try {
+    if (isMac) {
+      // macOS: use system 'Tink' sound via shell
+      require('child_process').exec('afplay /System/Library/Sounds/Tink.aiff');
+    } else {
+      // Windows/Linux: system bell via Electron shell
+      mainWindow?.webContents?.executeJavaScript(`
+        try { new Audio('data:audio/wav;base64,UklGRl9vT19teleGF2ZVRBLgAAAAAIAAEARKwAAIhYAQACABAAZGF0YQ==').play().catch(()=>{}); } catch(e) {}
+      `).catch(() => {});
+    }
+  } catch (e) {
+    console.warn('[Sound] Failed to play notification:', e.message);
+  }
+});
 
 // Upload image to Supabase (runs in main process where npm works)
 ipcMain.handle('upload-image', async (_ev, { buffer, prefix, userId }) => {

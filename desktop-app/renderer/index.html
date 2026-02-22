@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CrazyDesk Tracker</title>
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self' app: 'unsafe-inline' 'unsafe-eval' https://*.googleapis.com https://*.firebaseio.com https://*.supabase.co https://lrdbybkovflytzygspdf.supabase.co https://firestore.googleapis.com; script-src 'self' app: 'unsafe-inline' 'unsafe-eval'; img-src 'self' app: data: blob: https://*.supabase.co https://lrdbybkovflytzygspdf.supabase.co https://*.googleusercontent.com; connect-src 'self' app: https://*.googleapis.com https://firestore.googleapis.com https://*.supabase.co; media-src 'self' blob: mediastream:;" />
+    content="default-src 'self' app: 'unsafe-inline' 'unsafe-eval' https://*.googleapis.com https://*.firebaseio.com https://*.supabase.co https://lrdbybkovflytzygspdf.supabase.co https://firestore.googleapis.com; script-src 'self' app: 'unsafe-inline' 'unsafe-eval'; img-src 'self' app: data: blob: https://*.supabase.co https://lrdbybkovflytzygspdf.supabase.co https://*.googleusercontent.com; connect-src 'self' app: https://*.googleapis.com https://firestore.googleapis.com https://*.supabase.co; media-src 'self' data: blob: mediastream:;" />
   <style>
     :root {
       --bg: #1d232a; --bg2: #242b33; --bg3: #2a323c;
@@ -154,30 +154,6 @@
       <div class="timer-sub" id="timer-status">Not checked in</div>
     </div>
 
-    <!-- Action buttons: Not checked in -->
-    <div id="actions-not-checked-in">
-      <button id="btn-checkin" class="btn btn-success btn-block" style="font-size:16px; padding:14px;">
-        ⏰ Check In
-      </button>
-    </div>
-
-    <!-- Action buttons: Checked in (working) -->
-    <div id="actions-checked-in" class="hidden">
-      <div class="btn-grid mb">
-        <button id="btn-break" class="btn btn-warning">☕ Break</button>
-        <button id="btn-checkout" class="btn btn-error">⬆️ Check Out</button>
-      </div>
-      <button id="btn-manual-capture" class="btn btn-ghost btn-block btn-sm">📸 Manual Capture</button>
-    </div>
-
-    <!-- Action buttons: On break -->
-    <div id="actions-on-break" class="hidden">
-      <div class="btn-grid mb">
-        <button id="btn-resume" class="btn btn-success">▶️ Resume</button>
-        <button id="btn-checkout-break" class="btn btn-error">⬆️ Check Out</button>
-      </div>
-    </div>
-
     <!-- Tracker stats -->
     <div class="card card-compact">
       <div class="text-xs text-muted fw-bold mb">TODAY'S TRACKING</div>
@@ -197,32 +173,35 @@
     </div>
   </div>
 
-  <!-- ═══════════ CHECK-OUT MODAL ═══════════ -->
-  <div id="checkout-modal" class="modal-overlay hidden">
-    <div class="modal-box">
-      <div class="modal-title">✅ Check Out & Report</div>
-      <div class="label">What did you work on?</div>
-      <textarea id="report-text" class="textarea mb" placeholder="- Completed Task A&#10;- Fixed bug in module B"></textarea>
-      <div class="label">Proof of Work (optional link)</div>
-      <input id="proof-link" class="input mb" type="url" placeholder="https://..." />
-      <div style="display:flex; gap:8px; justify-content:flex-end;">
-        <button id="btn-cancel-checkout" class="btn btn-ghost btn-sm">Cancel</button>
-        <button id="btn-confirm-checkout" class="btn btn-primary btn-sm">Submit & Check Out</button>
+  <div id="toast" class="toast"></div>
+  <div id="capture-flash" class="capture-flash hidden"></div>
+
+  <!-- ═══════════ CAPTURE COUNTDOWN WARNING ═══════════ -->
+  <div id="capture-countdown-modal" class="modal-overlay hidden">
+    <div class="modal-box" style="max-width:340px; text-align:center;">
+      <div style="font-size:48px; margin-bottom:8px;" id="countdown-icon">📸</div>
+      <div class="modal-title" style="text-align:center;">Be Prepared!</div>
+      <p class="text-sm text-muted" id="countdown-label" style="margin-bottom:16px;">
+        Your screen &amp; photo will be captured in
+      </p>
+      <div id="countdown-timer" style="font-family:'SF Mono','Fira Code',monospace; font-size:48px; font-weight:800; color:var(--primary); margin-bottom:8px;">
+        60
+      </div>
+      <p class="text-xs text-muted">seconds</p>
+      <div id="countdown-beep-indicator" class="hidden" style="margin-top:12px;">
+        <span class="badge badge-warning" style="font-size:13px; padding:6px 16px;">🔔 Capturing soon...</span>
       </div>
     </div>
   </div>
-
-  <div id="toast" class="toast"></div>
-  <div id="capture-flash" class="capture-flash hidden"></div>
 
   <!-- ═══════════ APP LOGIC ═══════════ -->
   <script type="module">
     import {
       setSession, getSession, hasSession, refreshToken,
-      getActiveSession, checkIn, startBreak, resumeWork, checkOut,
+      getActiveSession, checkIn,
       saveActivityLog, updateHeartbeat, emergencyCheckOut,
     } from '../modules/firebase.mjs';
-    import { performCapture, startAllTracking, stopAllTracking } from '../modules/capture.mjs';
+    import { performCapture, startAllTracking, stopAllTracking, isCaptureInProgress } from '../modules/capture.mjs';
 
     const $ = id => document.getElementById(id);
     const waitingScreen = $('waiting-screen');
@@ -232,13 +211,46 @@
     const statusDot     = $('status-dot');
     const userName      = $('user-name');
     const userEmail     = $('user-email');
-    const actionsNotIn  = $('actions-not-checked-in');
-    const actionsIn     = $('actions-checked-in');
-    const actionsBreak  = $('actions-on-break');
-    const checkoutModal = $('checkout-modal');
     const logsList      = $('logs-list');
     const toastEl       = $('toast');
     const flashEl       = $('capture-flash');
+    const countdownModal = $('capture-countdown-modal');
+    const countdownTimer = $('countdown-timer');
+    const countdownIcon  = $('countdown-icon');
+    const countdownLabel = $('countdown-label');
+    const countdownBeep  = $('countdown-beep-indicator');
+
+    // ─── Capture Countdown Warning Logic ───────────────────
+    window.addEventListener('show-capture-countdown', (e) => {
+      const { type, seconds } = e.detail;
+      const labels = { auto: 'Auto capture', manual: 'Manual capture', remote: 'Remote capture' };
+      countdownLabel.textContent = `${labels[type] || 'Capture'} — your screen & photo will be taken in`;
+      countdownTimer.textContent = seconds;
+      countdownIcon.textContent = '📸';
+      countdownBeep.classList.add('hidden');
+      countdownModal.classList.remove('hidden');
+    });
+
+    window.addEventListener('capture-countdown-tick', (e) => {
+      const { remaining } = e.detail;
+      countdownTimer.textContent = remaining;
+
+      // Visual change at 3 seconds — beep zone
+      if (remaining <= 3) {
+        countdownTimer.style.color = 'var(--error)';
+        countdownIcon.textContent = '🔔';
+        countdownBeep.classList.remove('hidden');
+      } else if (remaining <= 10) {
+        countdownTimer.style.color = 'var(--warning)';
+      } else {
+        countdownTimer.style.color = 'var(--primary)';
+      }
+    });
+
+    window.addEventListener('capture-countdown-done', () => {
+      countdownModal.classList.add('hidden');
+      countdownTimer.style.color = 'var(--primary)';
+    });
 
     // ─── State ─────────────────────────────────────────────
     let sessionId = null;
@@ -328,24 +340,15 @@
       userEmail.textContent = 'Connected via web dashboard';
 
       if (!sessionId) {
-        actionsNotIn.classList.remove('hidden');
-        actionsIn.classList.add('hidden');
-        actionsBreak.classList.add('hidden');
         statusDot.className = 'dot dot-idle';
-        timerStatus.textContent = 'Ready to check in';
+        timerStatus.textContent = 'Waiting for check-in from web...';
         timerDisplay.textContent = '00:00:00';
         window.electronAPI?.updateStatus('idle');
       } else if (isOnBreak) {
-        actionsNotIn.classList.add('hidden');
-        actionsIn.classList.add('hidden');
-        actionsBreak.classList.remove('hidden');
         statusDot.className = 'dot dot-warning pulse';
         timerStatus.textContent = '☕ On Break';
         window.electronAPI?.updateStatus('break');
       } else {
-        actionsNotIn.classList.add('hidden');
-        actionsIn.classList.remove('hidden');
-        actionsBreak.classList.add('hidden');
         statusDot.className = 'dot dot-success pulse';
         timerStatus.textContent = '🟢 Working — Tracker Active';
         window.electronAPI?.updateStatus('active');
@@ -432,104 +435,21 @@
       }
 
       if (action === 'capture') {
-        // Remote capture command from web
+        // Remote capture command from web — skip if another capture is already running
+        if (isCaptureInProgress()) {
+          console.log('[DeepLink] Capture skipped — another capture in progress');
+          showToast('Capture already in progress', 'info');
+          return;
+        }
         flashScreen();
         const result = await performCapture('remote');
-        captureCount++;
-        $('stat-captures').textContent = captureCount;
-        showToast(result.flagged ? 'Capture failed' : 'Remote capture saved', result.flagged ? 'error' : 'info');
+        if (!result.skipped) {
+          captureCount++;
+          $('stat-captures').textContent = captureCount;
+          showToast(result.flagged ? 'Capture failed' : 'Remote capture saved', result.flagged ? 'error' : 'info');
+        }
       }
     });
-
-    // ─── Manual check-in (if user opens app directly, then web connects later) ──
-    $('btn-checkin').onclick = async () => {
-      if (!hasSession()) {
-        showToast('Please check in from the web dashboard first', 'error');
-        return;
-      }
-      $('btn-checkin').disabled = true;
-      try {
-        sessionId = await checkIn();
-        checkInTimeMs = Date.now();
-        isOnBreak = false;
-        totalBreakSec = 0;
-        breakStartMs = null;
-        startTimer();
-        startTracking();
-        updateUI();
-        syncSessionToMain();
-        showToast('Checked in!', 'success');
-        window.electronAPI?.notify('CrazyDesk', 'Checked in — tracking started');
-      } catch (e) {
-        showToast('Check-in failed: ' + e.message, 'error');
-      } finally { $('btn-checkin').disabled = false; }
-    };
-
-    // ─── Break ─────────────────────────────────────────────
-    $('btn-break').onclick = async () => {
-      if (!sessionId) return;
-      try {
-        await startBreak(sessionId);
-        isOnBreak = true;
-        breakStartMs = Date.now();
-        updateUI();
-        showToast('Break started — enjoy!', 'info');
-      } catch (e) { showToast('Failed: ' + e.message, 'error'); }
-    };
-
-    $('btn-resume').onclick = async () => {
-      if (!sessionId) return;
-      try {
-        await resumeWork(sessionId);
-        if (breakStartMs) totalBreakSec += Math.floor((Date.now() - breakStartMs) / 1000);
-        isOnBreak = false;
-        breakStartMs = null;
-        updateUI();
-        showToast('Welcome back!', 'success');
-      } catch (e) { showToast('Failed: ' + e.message, 'error'); }
-    };
-
-    // ─── Check Out ─────────────────────────────────────────
-    $('btn-checkout').onclick = () => checkoutModal.classList.remove('hidden');
-    $('btn-checkout-break').onclick = () => checkoutModal.classList.remove('hidden');
-    $('btn-cancel-checkout').onclick = () => checkoutModal.classList.add('hidden');
-
-    $('btn-confirm-checkout').onclick = async () => {
-      const report = $('report-text').value.trim();
-      if (!report) { showToast('Please write a summary', 'error'); return; }
-      $('btn-confirm-checkout').disabled = true;
-      try {
-        const proof = $('proof-link').value.trim();
-        await checkOut(sessionId, checkInTimeMs, report, proof, totalBreakSec);
-        stopAllTracking();
-        stopActivity();
-        stopTimer();
-        stopHeartbeat();
-        sessionId = null; checkInTimeMs = null; isOnBreak = false; breakStartMs = null; totalBreakSec = 0;
-        syncSessionToMain();
-        checkoutModal.classList.add('hidden');
-        $('report-text').value = '';
-        $('proof-link').value = '';
-        updateUI();
-        showToast('Checked out!', 'success');
-        window.electronAPI?.notify('CrazyDesk', 'Checked out — session complete');
-      } catch (e) {
-        showToast('Check-out failed: ' + e.message, 'error');
-      } finally { $('btn-confirm-checkout').disabled = false; }
-    };
-
-    // ─── Manual Capture ────────────────────────────────────
-    $('btn-manual-capture').onclick = async () => {
-      $('btn-manual-capture').disabled = true;
-      flashScreen();
-      try {
-        const result = await performCapture('manual');
-        captureCount++;
-        $('stat-captures').textContent = captureCount;
-        showToast(result.flagged ? 'Capture failed — flagged' : 'Captured!', result.flagged ? 'error' : 'success');
-      } catch (e) { showToast('Capture error', 'error'); }
-      finally { $('btn-manual-capture').disabled = false; }
-    };
 
     // ─── Start tracking ────────────────────────────────────
     function startTracking() {
