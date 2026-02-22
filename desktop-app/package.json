@@ -13,10 +13,7 @@
   "build": {
     "appId": "com.crazydesk.tracker",
     "productName": "CrazyDesk Tracker",
-    "asar": true,
-    "asarUnpack": [
-      ".env"
-    ],
+    "asar": false,
     "protocols": [
       {
         "name": "CrazyDesk Protocol",
@@ -25,8 +22,8 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "target": ["zip"],
-      "icon": "assets/icon.png",
+      "target": ["dmg"],
+      "icon": "assets/icon.icns",
       "identity": null,
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
