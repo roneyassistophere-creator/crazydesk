@@ -356,16 +356,39 @@ export default function WebTrackerPage() {
     try {
       await addDoc(collection(db, 'capture_commands'), {
         userId: uid,
+        type: 'remote',
         status: 'pending',
         requestedBy: user.uid,
         requestedAt: Timestamp.now(),
       });
-      toast.success('Capture command sent to desktop app');
+      toast.success('Remote capture command sent');
     } catch (e: any) {
       console.error('Remote capture:', e);
       toast.error('Failed to send capture command');
     } finally {
       setSendingCapture(false);
+    }
+  };
+
+  // ── Manual capture (user captures own screen via desktop/python app) ─
+  const [sendingManualCapture, setSendingManualCapture] = useState(false);
+  const handleManualCapture = async () => {
+    if (!user || !trackingActive) return;
+    setSendingManualCapture(true);
+    try {
+      await addDoc(collection(db, 'capture_commands'), {
+        userId: user.uid,
+        type: 'manual',
+        status: 'pending',
+        requestedBy: user.uid,
+        requestedAt: Timestamp.now(),
+      });
+      toast.success('Manual capture command sent — your screen will be captured shortly');
+    } catch (e: any) {
+      console.error('Manual capture:', e);
+      toast.error('Failed to send capture command');
+    } finally {
+      setSendingManualCapture(false);
     }
   };
 
@@ -423,7 +446,15 @@ export default function WebTrackerPage() {
             </button>
           )}
 
-          {/* Remote capture */}
+          {/* Manual capture — any checked-in user with desktop/python app */}
+          {trackingActive && usingDesktopApp && (
+            <button onClick={handleManualCapture} disabled={sendingManualCapture} className="btn btn-sm btn-primary btn-outline">
+              {sendingManualCapture ? <span className="loading loading-spinner loading-xs" /> : <Camera size={16} />}
+              <span className="hidden sm:inline">Manual Capture</span>
+            </button>
+          )}
+
+          {/* Remote capture — admin/manager only */}
           {isManagerOrAdmin && (
             <button onClick={() => handleRemoteCapture()} disabled={sendingCapture} className="btn btn-sm btn-info btn-outline">
               {sendingCapture ? <span className="loading loading-spinner loading-xs" /> : <Camera size={16} />}
@@ -556,7 +587,7 @@ export default function WebTrackerPage() {
                 {log.timestamp?.toDate?.() ? formatTime12h(log.timestamp.toDate()) : ''}
               </div>
 
-              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : log.type === 'auto' ? 'badge-ghost' : 'badge-info text-white'}`}>
+              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : log.type === 'auto' ? 'badge-ghost' : log.type === 'manual' ? 'badge-primary text-white' : 'badge-info text-white'}`}>
                 {log.flagged ? 'FLAGGED' : log.type === 'auto' ? 'Auto' : log.type === 'remote' ? 'Remote' : 'Manual'}
               </div>
 
@@ -619,7 +650,7 @@ export default function WebTrackerPage() {
                 <span className="text-sm opacity-70">
                   {lightboxLog.timestamp?.toDate?.()?.toLocaleDateString()} at {lightboxLog.timestamp?.toDate?.() ? formatTime12h(lightboxLog.timestamp.toDate()) : ''}
                 </span>
-                <span className={`badge badge-sm ${lightboxLog.type === 'auto' ? 'badge-ghost' : 'badge-info'}`}>
+                <span className={`badge badge-sm ${lightboxLog.type === 'auto' ? 'badge-ghost' : lightboxLog.type === 'manual' ? 'badge-primary' : 'badge-info'}`}>
                   {lightboxLog.type === 'auto' ? 'Auto' : lightboxLog.type === 'remote' ? 'Remote' : 'Manual'}
                 </span>
               </div>

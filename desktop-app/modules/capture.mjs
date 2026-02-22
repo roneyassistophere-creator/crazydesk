@@ -190,13 +190,13 @@ export async function performCapture(type = 'auto') {
   // ── Guard: skip if another capture is already running ──
   if (_captureInProgress) {
     console.warn(`[Capture] Skipping ${type} capture — another capture is already in progress`);
-    return { screenshotUrl: null, cameraImageUrl: null, flagged: false, skipped: true };
+    return { screenshotUrl: null, cameraImageUrl: null, flagged: false, skipped: true, type };
   }
 
   const { uid, displayName } = getSession();
   if (!uid) {
     console.warn('[Capture] No session UID, skipping capture');
-    return { screenshotUrl: null, cameraImageUrl: null, flagged: true };
+    return { screenshotUrl: null, cameraImageUrl: null, flagged: true, type };
   }
 
   // ── Acquire lock ──
@@ -263,10 +263,10 @@ export async function performCapture(type = 'auto') {
     // so manual/remote captures don't get followed immediately by an auto one
     rescheduleAutoCapture();
 
-    return { screenshotUrl, cameraImageUrl, flagged };
+    return { screenshotUrl, cameraImageUrl, flagged, type };
   } catch (e) {
     console.error(`[Capture] ${type} capture error:`, e);
-    return { screenshotUrl: null, cameraImageUrl: null, flagged: true };
+    return { screenshotUrl: null, cameraImageUrl: null, flagged: true, type };
   } finally {
     // ── Release lock ──
     _captureInProgress = false;
@@ -353,8 +353,9 @@ export function startRemotePoller(onCapture) {
         console.log('[Remote] Capture in progress, will retry command next poll');
         return;
       }
-      console.log('[Remote] Executing capture command:', cmd._id);
-      const result = await performCapture('remote');
+      const captureType = cmd.type === 'manual' ? 'manual' : 'remote';
+      console.log('[Remote] Executing capture command:', cmd._id, 'type:', captureType);
+      const result = await performCapture(captureType);
       onCapture?.(result);
       await completeCaptureCommand(cmd._id);
     } catch (e) {

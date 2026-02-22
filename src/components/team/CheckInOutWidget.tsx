@@ -833,6 +833,12 @@ export default function CheckInOutWidget({
       setShowReportModal(false);
       setReportText('');
       setProofLink('');
+
+      // Notify desktop app to stop tracking immediately
+      if (sessionSource === 'desktop') {
+        openDeepLink('crazydesk://checkout');
+      }
+
       toast.success('Checked out successfully');
     } catch (err: any) {
       console.error('Check-out error:', err);
@@ -840,7 +846,7 @@ export default function CheckInOutWidget({
     } finally {
       setLoading(false);
     }
-  }, [currentSessionId, checkInTime, totalBreakSeconds, isOnBreak, breakStartMs, reportText, proofLink, sessionSource]);
+  }, [currentSessionId, checkInTime, totalBreakSeconds, isOnBreak, breakStartMs, reportText, proofLink, sessionSource, openDeepLink]);
 
   // RENDER
   if (!user) return null;

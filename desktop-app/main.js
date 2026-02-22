@@ -7,7 +7,10 @@
    • Screen + camera capture, check-in/out/break, report
    ═══════════════════════════════════════════════════════════════ */
 
-const envPath = require('path').join(__dirname, '.env');
+const envPath = require('path').join(
+  __dirname.replace('app.asar', 'app.asar.unpacked'),
+  '.env'
+);
 const dotenvResult = require('dotenv').config({ path: envPath });
 if (dotenvResult.error) {
   console.warn('[App] .env file not found or unreadable:', envPath);

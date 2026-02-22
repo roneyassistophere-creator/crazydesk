@@ -200,6 +200,7 @@
       setSession, getSession, hasSession, refreshToken,
       getActiveSession, checkIn,
       saveActivityLog, updateHeartbeat, emergencyCheckOut,
+      getSessionStatus,
     } from '../modules/firebase.mjs';
     import { performCapture, startAllTracking, stopAllTracking, isCaptureInProgress } from '../modules/capture.mjs';
 
@@ -278,16 +279,48 @@
     let heartbeatInterval = null;
 
     // ─── Heartbeat — tells browser the desktop app is alive ──
+    // Also polls session status to detect web-initiated checkout
     function startHeartbeat() {
       stopHeartbeat();
       // Send immediately, then every 30 seconds
       if (sessionId) updateHeartbeat(sessionId).catch(() => {});
-      heartbeatInterval = setInterval(() => {
-        if (sessionId) updateHeartbeat(sessionId).catch(() => {});
+      heartbeatInterval = setInterval(async () => {
+        if (!sessionId) return;
+        updateHeartbeat(sessionId).catch(() => {});
+        // Poll session status — detect if web checked out
+        try {
+          const status = await getSessionStatus(sessionId);
+          if (status === 'completed') {
+            console.log('[Heartbeat] Session completed from web — stopping tracker');
+            handleWebCheckout();
+          }
+        } catch (e) {
+          console.warn('[Heartbeat] Session poll error:', e.message);
+        }
       }, 30_000);
     }
     function stopHeartbeat() {
       if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+    }
+
+    // ─── Handle checkout triggered from web (polling or deep link) ──
+    function handleWebCheckout() {
+      if (!sessionId) return;
+      console.log('[Checkout] Web-initiated checkout — stopping all tracking');
+      stopAllTracking();
+      stopActivity();
+      stopTimer();
+      stopHeartbeat();
+      sessionId = null;
+      checkInTimeMs = null;
+      isOnBreak = false;
+      breakStartMs = null;
+      totalBreakSec = 0;
+      captureCount = 0;
+      updateUI();
+      syncSessionToMain();
+      showToast('Checked out from web dashboard', 'info');
+      window.electronAPI?.notify('CrazyDesk', 'Session ended — checked out from web');
     }
 
     // ─── Emergency checkout on app quit ────────────────────
@@ -434,6 +467,11 @@
         console.log('[Token] Refreshed');
       }
 
+      if (action === 'checkout') {
+        console.log('[DeepLink] Checkout received from web');
+        handleWebCheckout();
+      }
+
       if (action === 'capture') {
         // Remote capture command from web — skip if another capture is already running
         if (isCaptureInProgress()) {
@@ -457,7 +495,12 @@
         flashScreen();
         captureCount++;
         $('stat-captures').textContent = captureCount;
-        if (!result.flagged) showToast('Auto-capture saved', 'info');
+        if (!result.flagged) {
+          const label = result.type === 'manual' ? 'Manual capture saved'
+                      : result.type === 'remote' ? 'Remote capture saved'
+                      : 'Auto-capture saved';
+          showToast(label, 'info');
+        }
       });
       startActivity();
       startHeartbeat();

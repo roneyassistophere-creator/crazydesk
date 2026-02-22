@@ -377,6 +377,21 @@ export function refreshToken(newToken) {
   _token = newToken;
 }
 
+// ─── CHECK SESSION STATUS — used to detect web-initiated checkout ──
+export async function getSessionStatus(sessionId) {
+  if (!sessionId || !_token) return null;
+  try {
+    const doc = await firestoreReq('GET', `/work_logs/${sessionId}?mask.fieldPaths=status`);
+    if (doc?.fields?.status?.stringValue) {
+      return doc.fields.status.stringValue;
+    }
+    return null;
+  } catch (e) {
+    console.warn('[Firebase] getSessionStatus failed:', e.message);
+    return null;
+  }
+}
+
 // ─── HEARTBEAT — updates lastHeartbeat on the active work_log ──
 export async function updateHeartbeat(sessionId) {
   if (!sessionId || !_token) return;
