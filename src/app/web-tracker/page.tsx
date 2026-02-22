@@ -38,7 +38,7 @@ interface TrackerLog {
   timestamp: any;
   screenshotUrl?: string;
   cameraImageUrl?: string;
-  type: 'auto' | 'manual' | 'remote' | 'flagged';
+  type: 'auto' | 'remote' | 'flagged';
   flagged?: boolean;
   flagReason?: string;
   source?: 'desktop' | 'browser';
@@ -370,28 +370,6 @@ export default function WebTrackerPage() {
     }
   };
 
-  // ── Manual capture (user captures own screen via desktop/python app) ─
-  const [sendingManualCapture, setSendingManualCapture] = useState(false);
-  const handleManualCapture = async () => {
-    if (!user || !trackingActive) return;
-    setSendingManualCapture(true);
-    try {
-      await addDoc(collection(db, 'capture_commands'), {
-        userId: user.uid,
-        type: 'manual',
-        status: 'pending',
-        requestedBy: user.uid,
-        requestedAt: Timestamp.now(),
-      });
-      toast.success('Manual capture command sent — your screen will be captured shortly');
-    } catch (e: any) {
-      console.error('Manual capture:', e);
-      toast.error('Failed to send capture command');
-    } finally {
-      setSendingManualCapture(false);
-    }
-  };
-
   // ── Render ──────────────────────────────────────────────────
   if (loading) return (
     <div className="p-8 flex justify-center"><span className="loading loading-spinner loading-lg" /></div>
@@ -443,14 +421,6 @@ export default function WebTrackerPage() {
             <button onClick={handleClearAllLogs} disabled={deleting} className="btn btn-sm btn-error btn-outline">
               {deleting ? <span className="loading loading-spinner loading-xs" /> : <Trash2 size={16} />}
               <span className="hidden sm:inline">Clear All</span>
-            </button>
-          )}
-
-          {/* Manual capture — any checked-in user with desktop/python app */}
-          {trackingActive && usingDesktopApp && (
-            <button onClick={handleManualCapture} disabled={sendingManualCapture} className="btn btn-sm btn-primary btn-outline">
-              {sendingManualCapture ? <span className="loading loading-spinner loading-xs" /> : <Camera size={16} />}
-              <span className="hidden sm:inline">Manual Capture</span>
             </button>
           )}
 
@@ -587,8 +557,8 @@ export default function WebTrackerPage() {
                 {log.timestamp?.toDate?.() ? formatTime12h(log.timestamp.toDate()) : ''}
               </div>
 
-              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : log.type === 'auto' ? 'badge-ghost' : log.type === 'manual' ? 'badge-primary text-white' : 'badge-info text-white'}`}>
-                {log.flagged ? 'FLAGGED' : log.type === 'auto' ? 'Auto' : log.type === 'remote' ? 'Remote' : 'Manual'}
+              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : log.type === 'auto' ? 'badge-ghost' : 'badge-info text-white'}`}>
+                {log.flagged ? 'FLAGGED' : log.type === 'auto' ? 'Auto' : 'Remote'}
               </div>
 
               {isManagerOrAdmin && (
@@ -650,8 +620,8 @@ export default function WebTrackerPage() {
                 <span className="text-sm opacity-70">
                   {lightboxLog.timestamp?.toDate?.()?.toLocaleDateString()} at {lightboxLog.timestamp?.toDate?.() ? formatTime12h(lightboxLog.timestamp.toDate()) : ''}
                 </span>
-                <span className={`badge badge-sm ${lightboxLog.type === 'auto' ? 'badge-ghost' : lightboxLog.type === 'manual' ? 'badge-primary' : 'badge-info'}`}>
-                  {lightboxLog.type === 'auto' ? 'Auto' : lightboxLog.type === 'remote' ? 'Remote' : 'Manual'}
+                <span className={`badge badge-sm ${lightboxLog.type === 'auto' ? 'badge-ghost' : 'badge-info'}`}>
+                  {lightboxLog.type === 'auto' ? 'Auto' : 'Remote'}
                 </span>
               </div>
 

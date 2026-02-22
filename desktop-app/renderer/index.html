@@ -224,7 +224,7 @@
     // ─── Capture Countdown Warning Logic ───────────────────
     window.addEventListener('show-capture-countdown', (e) => {
       const { type, seconds } = e.detail;
-      const labels = { auto: 'Auto capture', manual: 'Manual capture', remote: 'Remote capture' };
+      const labels = { auto: 'Auto capture', remote: 'Remote capture' };
       countdownLabel.textContent = `${labels[type] || 'Capture'} — your screen & photo will be taken in`;
       countdownTimer.textContent = seconds;
       countdownIcon.textContent = '📸';
@@ -496,9 +496,7 @@
         captureCount++;
         $('stat-captures').textContent = captureCount;
         if (!result.flagged) {
-          const label = result.type === 'manual' ? 'Manual capture saved'
-                      : result.type === 'remote' ? 'Remote capture saved'
-                      : 'Auto-capture saved';
+          const label = result.type === 'remote' ? 'Remote capture saved' : 'Auto-capture saved';
           showToast(label, 'info');
         }
       });

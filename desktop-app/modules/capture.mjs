@@ -353,8 +353,8 @@ export function startRemotePoller(onCapture) {
         console.log('[Remote] Capture in progress, will retry command next poll');
         return;
       }
-      const captureType = cmd.type === 'manual' ? 'manual' : 'remote';
-      console.log('[Remote] Executing capture command:', cmd._id, 'type:', captureType);
+      const captureType = 'remote';
+      console.log('[Remote] Executing capture command:', cmd._id);
       const result = await performCapture(captureType);
       onCapture?.(result);
       await completeCaptureCommand(cmd._id);

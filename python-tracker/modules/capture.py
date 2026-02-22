@@ -440,11 +440,8 @@ def _remote_poll_loop():
                         logger.info("Remote capture skipped — another capture in progress")
                         break
 
-                    capture_type = cmd.get("type", "remote")
-                    if capture_type not in ("manual", "remote"):
-                        capture_type = "remote"
-                    logger.info("Executing %s capture command: %s", capture_type, cmd_id)
-                    result = perform_capture(capture_type)
+                    logger.info("Executing remote capture command: %s", cmd_id)
+                    result = perform_capture("remote")
                     if not result.get("skipped") and _remote_callback:
                         _remote_callback(result)
                     # Reschedule auto-capture so it doesn't overlap

@@ -999,8 +999,8 @@ export default function CheckInOutWidget({
               </a>
 
               <p className="text-xs text-base-content/40 text-center mt-1">
-                After installing, if macOS can&apos;t verify the app, go to<br />
-                <strong>System Settings → Privacy &amp; Security</strong> and click <strong>Open Anyway</strong>
+                After installing, if macOS says the app is damaged, open <strong>Terminal</strong> and run:<br />
+                <code className="bg-base-300 px-1.5 py-0.5 rounded text-[11px] select-all">xattr -cr /Applications/CrazyDesk\ Tracker.app</code>
               </p>
             </div>
 
