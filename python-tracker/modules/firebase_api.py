@@ -123,7 +123,14 @@ def _firestore_req(method: str, path: str, body: dict | None = None) -> dict:
     logger.debug("Firestore %s %s", method, path.split("?")[0])
     resp = requests.request(method, url, headers=headers, json=body, timeout=15)
     if not resp.ok:
-        logger.error("Firestore %s %s => %d: %s", method, path.split("?")[0], resp.status_code, resp.text[:300])
+        if resp.status_code == 401:
+            logger.error(
+                "AUTH EXPIRED: Firestore returned 401 for %s %s — "
+                "token needs refresh from web app",
+                method, path.split("?")[0],
+            )
+        else:
+            logger.error("Firestore %s %s => %d: %s", method, path.split("?")[0], resp.status_code, resp.text[:300])
         resp.raise_for_status()
     return resp.json()
 

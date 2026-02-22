@@ -199,6 +199,69 @@ export default function CheckInOutWidget({
     };
   }, [isCheckedIn, sessionSource]);
 
+  // Auto-refresh token for existing desktop sessions (handles page reloads)
+  // When the component mounts and sees an active desktop session, it tries to
+  // reach the Python tracker and send a fresh Firebase token so heartbeats keep working.
+  useEffect(() => {
+    if (!isCheckedIn || sessionSource !== 'desktop' || !user) return;
+
+    let cancelled = false;
+
+    const refreshDesktopToken = async () => {
+      try {
+        // Check if the Python tracker is reachable
+        const statusRes = await fetch(`${PYTHON_TRACKER_URL}/api/status`, {
+          signal: AbortSignal.timeout(2000),
+        }).catch(() => null);
+
+        if (!statusRes?.ok || cancelled) return;
+
+        const token = await auth.currentUser?.getIdToken(true);
+        if (!token || cancelled) return;
+
+        // Send fresh token to Python tracker
+        await fetch(`${PYTHON_TRACKER_URL}/api/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+          signal: AbortSignal.timeout(5000),
+        });
+
+        if (cancelled) return;
+
+        // Re-establish periodic token refresh (every 50 min)
+        if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
+        tokenRefreshRef.current = setInterval(async () => {
+          try {
+            const freshToken = await auth.currentUser?.getIdToken(true);
+            if (freshToken) {
+              fetch(`${PYTHON_TRACKER_URL}/api/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: freshToken }),
+              }).catch(() => {});
+            }
+          } catch (e) {
+            console.warn('Token refresh to Python tracker failed:', e);
+          }
+        }, 50 * 60 * 1000);
+
+        console.log('Auto-refreshed token with Python tracker');
+      } catch (e) {
+        // Python tracker may not be running (macOS user) — that's OK
+        console.debug('Auto token refresh to Python tracker skipped:', e);
+      }
+    };
+
+    // Slight delay to let auth settle after page load
+    const timer = setTimeout(refreshDesktopToken, 2000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isCheckedIn, sessionSource, user]);
+
   // Timer tick
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -609,43 +672,95 @@ export default function CheckInOutWidget({
     }
   }, [currentSessionId]);
 
-  // RECONNECT — re-send deep link to desktop app to restore connection
+  // RECONNECT — try Python tracker HTTP first (Windows), fall back to deep link (macOS)
   const handleReconnectDesktop = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
       const token = await auth.currentUser?.getIdToken(true);
-      if (token) {
-        const params = new URLSearchParams({
-          token,
-          uid: user.uid,
-          name: user.displayName || profile?.displayName || 'User',
-          email: user.email || '',
-          photo: user.photoURL || '',
-        });
-        openDeepLink(`crazydesk://checkin?${params.toString()}`);
-
-        // Restart token refresh interval
-        if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
-        tokenRefreshRef.current = setInterval(async () => {
-          try {
-            const freshToken = await auth.currentUser?.getIdToken(true);
-            if (freshToken) {
-              openDeepLink(`crazydesk://refresh?token=${encodeURIComponent(freshToken)}`);
-            }
-          } catch (e) {
-            console.warn('Token refresh failed:', e);
-          }
-        }, 50 * 60 * 1000);
-
-        toast.success('Reconnect signal sent to desktop app');
-        // Give the desktop app time to reconnect and update heartbeat
-        setTimeout(() => {
-          setIsStaleDesktop(false);
-          setLoading(false);
-        }, 5000);
+      if (!token) {
+        toast.error('Could not get auth token');
+        setLoading(false);
         return;
       }
+
+      // 1. Try Python tracker HTTP first (Windows)
+      try {
+        const statusRes = await fetch(`${PYTHON_TRACKER_URL}/api/status`, {
+          signal: AbortSignal.timeout(2000),
+        }).catch(() => null);
+
+        if (statusRes?.ok) {
+          // Python tracker is running — send fresh token via /api/checkin (handles reconnection)
+          const res = await fetch(`${PYTHON_TRACKER_URL}/api/checkin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              token,
+              uid: user.uid,
+              name: user.displayName || profile?.displayName || 'User',
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            // Restart token refresh interval for Python tracker
+            if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
+            tokenRefreshRef.current = setInterval(async () => {
+              try {
+                const freshToken = await auth.currentUser?.getIdToken(true);
+                if (freshToken) {
+                  fetch(`${PYTHON_TRACKER_URL}/api/refresh`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: freshToken }),
+                  }).catch(() => {});
+                }
+              } catch (e) {
+                console.warn('Token refresh to Python tracker failed:', e);
+              }
+            }, 50 * 60 * 1000);
+
+            setIsStaleDesktop(false);
+            toast.success('Reconnected to Python Tracker!');
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (e) {
+        console.debug('Python tracker not available, trying deep link...', e);
+      }
+
+      // 2. Fall back to macOS deep link
+      const params = new URLSearchParams({
+        token,
+        uid: user.uid,
+        name: user.displayName || profile?.displayName || 'User',
+        email: user.email || '',
+        photo: user.photoURL || '',
+      });
+      openDeepLink(`crazydesk://checkin?${params.toString()}`);
+
+      // Restart token refresh interval for deep link (macOS)
+      if (tokenRefreshRef.current) clearInterval(tokenRefreshRef.current);
+      tokenRefreshRef.current = setInterval(async () => {
+        try {
+          const freshToken = await auth.currentUser?.getIdToken(true);
+          if (freshToken) {
+            openDeepLink(`crazydesk://refresh?token=${encodeURIComponent(freshToken)}`);
+          }
+        } catch (e) {
+          console.warn('Token refresh failed:', e);
+        }
+      }, 50 * 60 * 1000);
+
+      toast.success('Reconnect signal sent to desktop app');
+      // Give the desktop app time to reconnect and update heartbeat
+      setTimeout(() => {
+        setIsStaleDesktop(false);
+        setLoading(false);
+      }, 5000);
+      return;
     } catch (err) {
       console.error('Reconnect error:', err);
       toast.error('Failed to reconnect');

@@ -55,7 +55,7 @@ from modules.firebase_api import (
     emergency_check_out,
     update_heartbeat,
 )
-from modules.capture import perform_capture, start_all_tracking, stop_all_tracking
+from modules.capture import perform_capture, start_all_tracking, stop_all_tracking, set_countdown_callbacks
 from modules.activity import (
     start_activity_tracking,
     stop_activity_tracking,
@@ -99,13 +99,31 @@ def _to_epoch_ms(val) -> int:
 
 # ── Heartbeat ──────────────────────────────────────────────────
 
+_heartbeat_failures = 0
+_MAX_HEARTBEAT_FAILURES = 5
+
 def _heartbeat_loop():
+    global _heartbeat_failures
     while _heartbeat_running and not _shutdown_event.is_set():
         if session_id:
             try:
                 update_heartbeat(session_id)
-            except Exception:
-                pass
+                if _heartbeat_failures > 0:
+                    logger.info("Heartbeat recovered after %d failures", _heartbeat_failures)
+                _heartbeat_failures = 0
+            except Exception as e:
+                _heartbeat_failures += 1
+                if _heartbeat_failures <= 3 or _heartbeat_failures % 10 == 0:
+                    logger.warning(
+                        "Heartbeat failed (%d consecutive): %s",
+                        _heartbeat_failures, e,
+                    )
+                if _heartbeat_failures == _MAX_HEARTBEAT_FAILURES:
+                    logger.error(
+                        "Heartbeat failed %d times — token may be expired. "
+                        "Waiting for web app to send a fresh token via /api/refresh.",
+                        _heartbeat_failures,
+                    )
         _shutdown_event.wait(30)
 
 
@@ -155,6 +173,8 @@ def _stats_updater():
 
 def on_capture_done(result):
     global capture_count
+    if result.get("skipped"):
+        return
     capture_count += 1
     flagged = result.get("flagged", True)
     logger.info(
@@ -276,6 +296,14 @@ def handle_checkin(data: dict) -> dict:
 
 def handle_refresh(data: dict) -> dict:
     refresh_token(data["token"])
+    # Immediately trigger a heartbeat with the fresh token so the web app
+    # sees the session is alive right away (no 30-second gap).
+    if session_id:
+        try:
+            update_heartbeat(session_id)
+            logger.info("Post-refresh heartbeat sent for session: %s", session_id)
+        except Exception as e:
+            logger.warning("Post-refresh heartbeat failed: %s", e)
     return {"ok": True}
 
 
@@ -283,6 +311,8 @@ def handle_capture(data: dict) -> dict:
     global capture_count
     try:
         result = perform_capture("manual")
+        if result.get("skipped"):
+            return {"ok": True, "skipped": True}
         capture_count += 1
         if _gui:
             clicks, keys = get_counts()
@@ -341,6 +371,8 @@ def handle_status() -> dict:
         "captureCount": capture_count,
         "clicks": clicks,
         "keystrokes": keys,
+        "heartbeatOk": _heartbeat_failures < _MAX_HEARTBEAT_FAILURES,
+        "heartbeatFailures": _heartbeat_failures,
     }
 
 
@@ -502,6 +534,13 @@ def main():
         on_checkout=handle_gui_checkout,
         on_break=handle_gui_break,
     )
+
+    # Wire capture countdown display to the GUI
+    set_countdown_callbacks(
+        on_tick=lambda remaining, ctype: _gui.show_countdown(remaining, ctype) if _gui else None,
+        on_done=lambda: _gui.hide_countdown() if _gui else None,
+    )
+
     _gui.run()  # blocks until window is destroyed
 
     # After GUI closes, ensure cleanup runs

@@ -86,6 +86,9 @@ class TrackerGUI:
         self._conn_label: tk.Label | None = None
         self._checkout_btn: tk.Button | None = None
         self._break_btn: tk.Button | None = None
+        self._countdown_frame: tk.Frame | None = None
+        self._countdown_label: tk.Label | None = None
+        self._countdown_bar: tk.Canvas | None = None
 
     # ── Public thread-safe setters ─────────────────────────────
 
@@ -128,6 +131,14 @@ class TrackerGUI:
     def set_connected(self, connected: bool):
         self._connected = connected
         self._schedule_ui(self._refresh_all)
+
+    def show_countdown(self, remaining: int, capture_type: str):
+        """Update the countdown overlay (thread-safe). Called every second."""
+        self._schedule_ui(lambda: self._update_countdown(remaining, capture_type))
+
+    def hide_countdown(self):
+        """Hide the countdown overlay (thread-safe)."""
+        self._schedule_ui(self._hide_countdown_ui)
 
     # ── Lifecycle ──────────────────────────────────────────────
 
@@ -226,23 +237,38 @@ class TrackerGUI:
         )
         timer_sub.pack()
 
+        # ── Capture countdown overlay (hidden by default) ──────
+        self._countdown_frame = tk.Frame(self._root, bg=WARNING, padx=10, pady=8)
+        # Not packed — shown/hidden dynamically
+
+        self._countdown_label = tk.Label(
+            self._countdown_frame, text="",
+            font=("Segoe UI", 11, "bold"), fg=BG, bg=WARNING, anchor="center",
+        )
+        self._countdown_label.pack(fill="x")
+
+        self._countdown_bar = tk.Canvas(
+            self._countdown_frame, height=6, bg=BG3, highlightthickness=0,
+        )
+        self._countdown_bar.pack(fill="x", pady=(6, 0))
+
         # ── Stats row ─────────────────────────────────────────
-        stats_frame = tk.Frame(self._root, bg=BG2, padx=14, pady=10)
-        stats_frame.pack(fill="x", padx=12, pady=(0, 8))
+        self._stats_frame = tk.Frame(self._root, bg=BG2, padx=14, pady=10)
+        self._stats_frame.pack(fill="x", padx=12, pady=(0, 8))
 
         for col in range(3):
-            stats_frame.columnconfigure(col, weight=1)
+            self._stats_frame.columnconfigure(col, weight=1)
 
         for i, (label_text, val) in enumerate([("Captures", "0"), ("Clicks", "0"), ("Keys", "0")]):
-            cell = tk.Frame(stats_frame, bg=BG2)
+            cell = tk.Frame(self._stats_frame, bg=BG2)
             cell.grid(row=0, column=i, sticky="nsew", padx=4)
             vl = tk.Label(cell, text=val, font=("Segoe UI", 16, "bold"), fg=WHITE, bg=BG2)
             vl.pack()
             tk.Label(cell, text=label_text, font=("Segoe UI", 7), fg=TEXT2, bg=BG2).pack()
 
-        self._captures_label = stats_frame.grid_slaves(row=0, column=0)[0].winfo_children()[0]
-        self._activity_label_clicks = stats_frame.grid_slaves(row=0, column=1)[0].winfo_children()[0]
-        self._activity_label_keys = stats_frame.grid_slaves(row=0, column=2)[0].winfo_children()[0]
+        self._captures_label = self._stats_frame.grid_slaves(row=0, column=0)[0].winfo_children()[0]
+        self._activity_label_clicks = self._stats_frame.grid_slaves(row=0, column=1)[0].winfo_children()[0]
+        self._activity_label_keys = self._stats_frame.grid_slaves(row=0, column=2)[0].winfo_children()[0]
 
         # ── Buttons ────────────────────────────────────────────
         btn_frame = tk.Frame(self._root, bg=BG, padx=12, pady=8)
@@ -398,6 +424,54 @@ class TrackerGUI:
             self._activity_label_clicks.config(text=str(self._clicks))
         if self._activity_label_keys:
             self._activity_label_keys.config(text=str(self._keys))
+
+    def _update_countdown(self, remaining: int, capture_type: str):
+        """Show or update the countdown overlay."""
+        if not self._countdown_frame or not self._root:
+            return
+
+        label = capture_type.capitalize() if capture_type else "Auto"
+        if remaining <= 3:
+            self._countdown_label.config(
+                text=f"📸 {label} capture in {remaining}s!",
+                fg=WHITE, bg=ERROR,
+            )
+            self._countdown_frame.config(bg=ERROR)
+        else:
+            self._countdown_label.config(
+                text=f"📸 {label} capture in {remaining}s",
+                fg=BG, bg=WARNING,
+            )
+            self._countdown_frame.config(bg=WARNING)
+
+        # Progress bar
+        self._countdown_bar.delete("all")
+        bar_width = self._countdown_bar.winfo_width() or 300
+        from modules.capture import COUNTDOWN_SECONDS
+        progress = max(0, (COUNTDOWN_SECONDS - remaining) / COUNTDOWN_SECONDS)
+        fill_w = int(bar_width * progress)
+        bar_color = ERROR if remaining <= 3 else SUCCESS
+        self._countdown_bar.create_rectangle(0, 0, fill_w, 6, fill=bar_color, outline="")
+
+        # Show the frame if not already visible
+        if not self._countdown_frame.winfo_ismapped():
+            # Pack it right after where it was created (between timer and stats)
+            self._countdown_frame.pack(fill="x", padx=12, pady=(0, 4),
+                                       before=self._stats_frame)
+
+        # Also ensure the window is visible so user sees the warning
+        try:
+            self._root.deiconify()
+            self._root.lift()
+            self._root.attributes("-topmost", True)
+            self._root.after(100, lambda: self._root.attributes("-topmost", False))
+        except Exception:
+            pass
+
+    def _hide_countdown_ui(self):
+        """Hide the countdown overlay."""
+        if self._countdown_frame and self._countdown_frame.winfo_ismapped():
+            self._countdown_frame.pack_forget()
 
     def _tick_timer(self):
         """Update the timer display every second."""
