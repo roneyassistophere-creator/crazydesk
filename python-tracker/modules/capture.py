@@ -19,6 +19,7 @@ import random
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 
 import cv2
 import mss
@@ -40,6 +41,10 @@ CAPTURE_MAX_MIN = 30
 REMOTE_POLL_SEC = 15
 COUNTDOWN_SECONDS = 60          # 1-minute warning before capture
 POST_CAPTURE_COOLDOWN_SEC = 120  # 2 min cooldown after any capture
+
+
+# Track the last capture completion time (epoch seconds) to enforce global cooldown
+_last_capture_time: float = 0
 
 
 def _random_delay_sec() -> float:
@@ -229,14 +234,21 @@ def perform_capture(capture_type: str = "auto") -> dict:
       2. screen + camera capture
       3. upload → save tracker log.
     Returns {"screenshot_url": ..., "camera_url": ..., "flagged": bool}.
-    Only one capture can run at a time (locked).
+    Only one capture can run at a time (locked + global cooldown).
     """
-    global _capture_in_progress
+    global _capture_in_progress, _last_capture_time
 
-    # Guard: skip if another capture already running
+    # Guard: skip if another capture already running OR too soon after last capture
     with _capture_lock:
         if _capture_in_progress:
             logger.warning("Skipping %s capture — another capture in progress", capture_type)
+            return {"screenshot_url": None, "camera_url": None, "flagged": False, "skipped": True}
+        elapsed = time.time() - _last_capture_time
+        if _last_capture_time > 0 and elapsed < POST_CAPTURE_COOLDOWN_SEC:
+            logger.warning(
+                "Skipping %s capture — cooldown active (%.0fs since last capture, need %ds)",
+                capture_type, elapsed, POST_CAPTURE_COOLDOWN_SEC,
+            )
             return {"screenshot_url": None, "camera_url": None, "flagged": False, "skipped": True}
         _capture_in_progress = True
 
@@ -295,6 +307,7 @@ def perform_capture(capture_type: str = "auto") -> dict:
     finally:
         with _capture_lock:
             _capture_in_progress = False
+            _last_capture_time = time.time()
 
 
 # ── Auto-capture scheduler (with cooldown + lock awareness) ────
@@ -372,6 +385,25 @@ _remote_running = False
 _remote_callback = None
 
 
+def _command_age_sec(cmd: dict) -> float:
+    """Return the age of a capture command in seconds, or 0 if unknown."""
+    requested_at = cmd.get("requestedAt")
+    if not requested_at:
+        return 0
+    try:
+        if isinstance(requested_at, datetime):
+            return (datetime.now(timezone.utc) - requested_at).total_seconds()
+        if isinstance(requested_at, str):
+            dt = datetime.fromisoformat(requested_at.replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - dt).total_seconds()
+    except Exception:
+        pass
+    return 0
+
+
+MAX_COMMAND_AGE_SEC = 300  # Ignore capture commands older than 5 minutes
+
+
 def _remote_poll_loop():
     while _remote_running:
         try:
@@ -381,16 +413,37 @@ def _remote_poll_loop():
                     logger.info("Found %d pending remote capture command(s)", len(commands))
                 # Process only the first command to prevent rapid-fire captures
                 for cmd in commands[:1]:
-                    if _capture_in_progress:
-                        logger.info("Remote capture skipped — another capture in progress, will retry")
-                        break
                     cmd_id = cmd.get("_id")
+
+                    # Mark command as completed FIRST to prevent re-processing
+                    # even if the capture itself fails or is skipped
+                    if cmd_id:
+                        try:
+                            complete_capture_command(cmd_id)
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to complete command %s — skipping to prevent loop: %s",
+                                cmd_id, e,
+                            )
+                            break  # Don't capture if we can't mark it done
+
+                    # Skip stale commands (older than 5 minutes)
+                    age = _command_age_sec(cmd)
+                    if age > MAX_COMMAND_AGE_SEC:
+                        logger.info(
+                            "Skipping stale capture command %s (age: %.0fs)",
+                            cmd_id, age,
+                        )
+                        continue
+
+                    if _capture_in_progress:
+                        logger.info("Remote capture skipped — another capture in progress")
+                        break
+
                     logger.info("Executing remote capture command: %s", cmd_id)
-                    result = perform_capture("manual")
+                    result = perform_capture("remote")
                     if not result.get("skipped") and _remote_callback:
                         _remote_callback(result)
-                    if cmd_id:
-                        complete_capture_command(cmd_id)
                     # Reschedule auto-capture so it doesn't overlap
                     _reschedule_after_capture()
         except Exception as e:

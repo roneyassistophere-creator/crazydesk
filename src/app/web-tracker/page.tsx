@@ -556,8 +556,8 @@ export default function WebTrackerPage() {
                 {log.timestamp?.toDate?.() ? formatTime12h(log.timestamp.toDate()) : ''}
               </div>
 
-              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : (log.type === 'manual' || log.type === 'remote') ? 'badge-info text-white' : 'badge-ghost'}`}>
-                {log.flagged ? 'FLAGGED' : (log.type === 'manual' || log.type === 'remote') ? 'Manual' : 'Auto'}
+              <div className={`absolute top-2 right-2 badge badge-sm border-none ${log.flagged ? 'badge-error text-white' : log.type === 'auto' ? 'badge-ghost' : 'badge-info text-white'}`}>
+                {log.flagged ? 'FLAGGED' : log.type === 'auto' ? 'Auto' : log.type === 'remote' ? 'Remote' : 'Manual'}
               </div>
 
               {isManagerOrAdmin && (
@@ -619,8 +619,8 @@ export default function WebTrackerPage() {
                 <span className="text-sm opacity-70">
                   {lightboxLog.timestamp?.toDate?.()?.toLocaleDateString()} at {lightboxLog.timestamp?.toDate?.() ? formatTime12h(lightboxLog.timestamp.toDate()) : ''}
                 </span>
-                <span className={`badge badge-sm ${(lightboxLog.type === 'manual' || lightboxLog.type === 'remote') ? 'badge-info' : 'badge-ghost'}`}>
-                  {(lightboxLog.type === 'manual' || lightboxLog.type === 'remote') ? 'Manual' : 'Auto'}
+                <span className={`badge badge-sm ${lightboxLog.type === 'auto' ? 'badge-ghost' : 'badge-info'}`}>
+                  {lightboxLog.type === 'auto' ? 'Auto' : lightboxLog.type === 'remote' ? 'Remote' : 'Manual'}
                 </span>
               </div>
 
