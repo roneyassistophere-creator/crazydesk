@@ -870,16 +870,16 @@ export default function CheckInOutWidget({
               <div className="divider text-xs text-base-content/40 my-0">OR</div>
 
               <a
-                href="/downloads/CrazyDeskTracker.zip"
-                download="CrazyDeskTracker.zip"
+                href="/downloads/CrazyDeskTracker.dmg"
+                download="CrazyDeskTracker.dmg"
                 className="btn btn-ghost btn-sm gap-2"
               >
                 <Download className="w-4 h-4" /> Download macOS App
               </a>
 
               <p className="text-xs text-base-content/40 text-center mt-1">
-                After extracting, if macOS says the app is damaged, open Terminal and run:<br />
-                <code className="text-primary/80 select-all">xattr -cr &quot;CrazyDesk Tracker.app&quot;</code>
+                After installing, if macOS can&apos;t verify the app, go to<br />
+                <strong>System Settings → Privacy &amp; Security</strong> and click <strong>Open Anyway</strong>
               </p>
             </div>
 
