@@ -3,7 +3,7 @@ import { User, Clock, Settings2, Briefcase, MoreHorizontal, Eye, Monitor, Globe,
 import { useAuth } from '@/context/AuthContext';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { db } from '@/lib/firebase/config';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, Timestamp } from 'firebase/firestore';
 import Link from 'next/link';
 
 interface TeamMemberCardProps {
@@ -52,39 +52,40 @@ export default function TeamMemberCard({ member, onClick, onEdit, onChat }: Team
       setSessionSeconds(0);
       return;
     }
-    (async () => {
-      try {
-        const snap = await getDocs(
-          query(collection(db, 'work_logs'),
-            where('userId', '==', member.uid),
-            where('status', 'in', ['active', 'break']),
-          )
-        );
-        if (!snap.empty) {
-          const data = snap.docs[0].data();
-          setTrackingSource(data.source || 'browser');
-          // Extract session info
-          const checkIn = data.checkInTime?.toDate?.() ?? new Date();
-          const breaks = (data.breaks || []).map((b: any) => ({
-            start: b.startTime?.toDate?.() ?? new Date(),
-            end: b.endTime?.toDate?.() ?? undefined,
-          }));
-          sessionRef.current = { checkIn, breaks, status: data.status };
-          setSessionStatus(data.status as 'active' | 'break');
-          setSessionSeconds(computeWorkSeconds());
-        } else {
-          setTrackingSource(null);
-          sessionRef.current = null;
-          setSessionStatus(null);
-          setSessionSeconds(0);
-        }
-      } catch {
+
+    const q = query(
+      collection(db, 'work_logs'),
+      where('userId', '==', member.uid),
+      where('status', 'in', ['active', 'break']),
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      if (!snap.empty) {
+        const data = snap.docs[0].data();
+        setTrackingSource(data.source || 'browser');
+        // Extract session info
+        const checkIn = data.checkInTime?.toDate?.() ?? new Date();
+        const breaks = (data.breaks || []).map((b: any) => ({
+          start: b.startTime?.toDate?.() ?? new Date(),
+          end: b.endTime?.toDate?.() ?? undefined,
+        }));
+        sessionRef.current = { checkIn, breaks, status: data.status };
+        setSessionStatus(data.status as 'active' | 'break');
+        setSessionSeconds(computeWorkSeconds());
+      } else {
         setTrackingSource(null);
         sessionRef.current = null;
         setSessionStatus(null);
         setSessionSeconds(0);
       }
-    })();
+    }, () => {
+      setTrackingSource(null);
+      sessionRef.current = null;
+      setSessionStatus(null);
+      setSessionSeconds(0);
+    });
+
+    return () => unsub();
   }, [member.uid, member.isOnline, computeWorkSeconds]);
 
   // Tick the session timer every second

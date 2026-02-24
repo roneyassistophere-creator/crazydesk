@@ -449,7 +449,7 @@ export default function WeeklyRotaView({ members }: WeeklyRotaViewProps) {
                               className="absolute top-0 bottom-0 w-0.5 bg-error z-10 pointer-events-none"
                               style={{ left: currentTimeLeft }}
                             >
-                              <div className="w-2 h-2 rounded-full bg-error -ml-[3px] -mt-0.5" />
+                              <div className="w-2 h-2 rounded-full bg-error -ml-0.75 -mt-0.5" />
                             </div>
                           )}
                         </div>

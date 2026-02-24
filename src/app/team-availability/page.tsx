@@ -289,7 +289,6 @@ export default function TeamAvailability() {
                 const displayMember = {
                     ...member,
                     isOnline: !!activeLog,
-                    currentStatus: activeLog?.status || (getMemberSortInfo(member).status === 'scheduled' ? 'scheduled' : 'offline')
                 };
 
                 return (

@@ -44,9 +44,9 @@ export function useTeamData() {
            return {
                id: u.uid,
                uid: u.uid,
-               isOnline: isActive,
                ...profile,
-               // Ensure core user data from users collection takes priority over member_profiles
+               // Computed & core fields after spread to ensure they take priority
+               isOnline: isActive,
                displayName: u.displayName || u.email || 'Unknown User',
                email: u.email || '',
                role: u.role,
