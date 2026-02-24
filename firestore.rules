@@ -96,26 +96,31 @@ service cloud.firestore {
 
     // Tasks collection rules
     match /tasks/{taskId} {
-      // Admins/Managers can read all tasks; others can only read their own
+      // Admins/Managers can read all tasks; others can read their own or tasks they requested
       allow read: if isManagerOrAdmin() || 
-        (isAuthenticated() && resource.data.createdBy == request.auth.uid);
+        (isAuthenticated() && resource.data.createdBy == request.auth.uid) ||
+        (isAuthenticated() && resource.data.requestedByUserId == request.auth.uid);
       // Anyone authenticated can create tasks
       allow create: if isAuthenticated();
       // Admins/Managers can update/delete any task
-      // Team members can only update/delete tasks they created
+      // Task owners can update/delete tasks they created
+      // Requesters can update/delete tasks they requested (for deletion approval flow)
       allow update, delete: if isManagerOrAdmin() || 
-        (isAuthenticated() && resource.data.createdBy == request.auth.uid);
+        (isAuthenticated() && resource.data.createdBy == request.auth.uid) ||
+        (isAuthenticated() && resource.data.requestedByUserId == request.auth.uid);
 
       // Subtasks subcollection
       match /subtasks/{subtaskId} {
         // Readable if user can read the parent task
         allow read: if isManagerOrAdmin() || 
-          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.createdBy == request.auth.uid);
+          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.createdBy == request.auth.uid) ||
+          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.requestedByUserId == request.auth.uid);
         allow create: if isAuthenticated();
         // Admins/Managers can update/delete any subtask
-        // Team members can only modify subtasks under tasks they own
+        // Task owners or requesters can modify subtasks
         allow update, delete: if isManagerOrAdmin() || 
-          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.createdBy == request.auth.uid);
+          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.createdBy == request.auth.uid) ||
+          (isAuthenticated() && get(/databases/$(database)/documents/tasks/$(taskId)).data.requestedByUserId == request.auth.uid);
       }
     }
 
@@ -132,6 +137,34 @@ service cloud.firestore {
       
       // Managers/Admins can delete commands
       allow delete: if isManagerOrAdmin();
+    }
+
+    // Task Requests (request-to-add-task between team members)
+    match /task_requests/{requestId} {
+      // Users can read requests they sent or received
+      allow read: if isAuthenticated() && 
+        (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid);
+      // Any authenticated user can create a task request
+      allow create: if isAuthenticated();
+      // Sender or recipient can update (accept/reject)
+      allow update: if isAuthenticated() && 
+        (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid);
+      // Sender or recipient can delete, admins too
+      allow delete: if isAuthenticated() && 
+        (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid || isManagerOrAdmin());
+    }
+
+    // Chat Messages (direct messages between team members)
+    match /chat_messages/{messageId} {
+      // Participants can read messages in their conversation
+      allow read: if isAuthenticated() && 
+        request.auth.uid in resource.data.participants;
+      // Any authenticated user can create a message (sender must be in participants)
+      allow create: if isAuthenticated() && 
+        request.auth.uid in request.resource.data.participants;
+      // Only sender can delete their own messages
+      allow delete: if isAuthenticated() && 
+        resource.data.senderId == request.auth.uid;
     }
   }
 }

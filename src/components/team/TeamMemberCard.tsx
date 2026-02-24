@@ -1,18 +1,19 @@
 import { MemberProfile } from '@/types/team';
-import { User, Clock, Edit2, Briefcase, MoreHorizontal, Eye, Monitor, Globe } from 'lucide-react';
+import { User, Clock, Settings2, Briefcase, MoreHorizontal, Eye, Monitor, Globe, Mail, Play } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { db } from '@/lib/firebase/config';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
 import Link from 'next/link';
 
 interface TeamMemberCardProps {
   member: MemberProfile;
   onClick: () => void;
   onEdit: () => void;
+  onChat?: () => void;
 }
 
-export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCardProps) {
+export default function TeamMemberCard({ member, onClick, onEdit, onChat }: TeamMemberCardProps) {
   const { profile } = useAuth();
   
   const canEdit = profile?.role === 'ADMIN' || profile?.role === 'MANAGER';
@@ -20,9 +21,37 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
   
   // Track whether user is checked in via desktop app or browser
   const [trackingSource, setTrackingSource] = useState<string | null>(null);
+  // Session timer state
+  const [sessionSeconds, setSessionSeconds] = useState<number>(0);
+  const [sessionStatus, setSessionStatus] = useState<'active' | 'break' | null>(null);
+  const sessionRef = useRef<{ checkIn: Date; breaks: { start: Date; end?: Date }[]; status: string } | null>(null);
+
+  // Compute work seconds from session data
+  const computeWorkSeconds = useCallback(() => {
+    const s = sessionRef.current;
+    if (!s) return 0;
+    const now = new Date();
+    const totalElapsed = (now.getTime() - s.checkIn.getTime()) / 1000;
+    let breakSecs = 0;
+    for (const b of s.breaks) {
+      if (b.end) {
+        breakSecs += (b.end.getTime() - b.start.getTime()) / 1000;
+      } else {
+        // Currently on break
+        breakSecs += (now.getTime() - b.start.getTime()) / 1000;
+      }
+    }
+    return Math.max(0, Math.floor(totalElapsed - breakSecs));
+  }, []);
 
   useEffect(() => {
-    if (!member.isOnline) { setTrackingSource(null); return; }
+    if (!member.isOnline) {
+      setTrackingSource(null);
+      sessionRef.current = null;
+      setSessionStatus(null);
+      setSessionSeconds(0);
+      return;
+    }
     (async () => {
       try {
         const snap = await getDocs(
@@ -32,13 +61,48 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
           )
         );
         if (!snap.empty) {
-          setTrackingSource(snap.docs[0].data().source || 'browser');
+          const data = snap.docs[0].data();
+          setTrackingSource(data.source || 'browser');
+          // Extract session info
+          const checkIn = data.checkInTime?.toDate?.() ?? new Date();
+          const breaks = (data.breaks || []).map((b: any) => ({
+            start: b.startTime?.toDate?.() ?? new Date(),
+            end: b.endTime?.toDate?.() ?? undefined,
+          }));
+          sessionRef.current = { checkIn, breaks, status: data.status };
+          setSessionStatus(data.status as 'active' | 'break');
+          setSessionSeconds(computeWorkSeconds());
         } else {
           setTrackingSource(null);
+          sessionRef.current = null;
+          setSessionStatus(null);
+          setSessionSeconds(0);
         }
-      } catch { setTrackingSource(null); }
+      } catch {
+        setTrackingSource(null);
+        sessionRef.current = null;
+        setSessionStatus(null);
+        setSessionSeconds(0);
+      }
     })();
-  }, [member.uid, member.isOnline]);
+  }, [member.uid, member.isOnline, computeWorkSeconds]);
+
+  // Tick the session timer every second
+  useEffect(() => {
+    if (!sessionRef.current) return;
+    const id = setInterval(() => {
+      setSessionSeconds(computeWorkSeconds());
+    }, 1000);
+    return () => clearInterval(id);
+  }, [sessionStatus, computeWorkSeconds]);
+
+  // Format seconds into readable duration
+  const fmtSession = (secs: number) => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
 
   // Status Logic
   const activeNow = member.isOnline; // In a real app, calculate this based on time slots + current time
@@ -219,6 +283,18 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
                 </div>
             </div>
 
+            {/* Session Running Indicator */}
+            {sessionStatus && (
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold mb-3 ${sessionStatus === 'break' ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}>
+                <span className="relative flex h-2 w-2">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${sessionStatus === 'break' ? 'bg-warning' : 'bg-success'}`} />
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${sessionStatus === 'break' ? 'bg-warning' : 'bg-success'}`} />
+                </span>
+                <span>{sessionStatus === 'break' ? 'On Break' : 'Session running'}</span>
+                <span className="font-mono opacity-80">· {fmtSession(sessionSeconds)}</span>
+              </div>
+            )}
+
             {/* Footer Section: Availability & Actions */}
             <div className="mt-auto pt-3 border-t border-base-content/5 flex items-center justify-between">
                 <div className="flex flex-col">
@@ -237,14 +313,47 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
                 </div>
 
                 <div className="flex items-center gap-2">
-                    {/* Standalone WhatsApp Button - Always Visible & Prominent */}
+                    {/* Admin/Manager Action Buttons - Left side */}
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-2 group-hover:translate-x-0 duration-300">
+                        {canEdit && (
+                            <Link 
+                                href={`/web-tracker?userId=${member.uid}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="btn btn-circle btn-xs btn-ghost hover:bg-base-content/10 hover:text-info transition-colors"
+                                title="View Live Tracker"
+                            >
+                                <Eye size={14} />
+                            </Link>
+                        )}
+                        {canEdit && (
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); onEdit(); }}
+                                className="btn btn-circle btn-xs btn-ghost hover:bg-base-content/10 hover:text-primary transition-colors"
+                                title="Settings"
+                            >
+                                <Settings2 size={14} />
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Communication Buttons - Right side */}
+                    {!isMe && onChat && (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onChat(); }}
+                            className="btn btn-circle btn-sm bg-info/10 text-info hover:bg-info hover:text-info-content border-none transition-all z-20"
+                            title="Send Message"
+                        >
+                            <Mail size={16} />
+                        </button>
+                    )}
+
                     {member.whatsapp && (
                         <a 
                             href={`https://wa.me/${member.whatsapp}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="btn btn-circle btn-sm bg-success/10 text-success hover:bg-success hover:text-white border-none shadow-sm transition-all z-20"
+                            className="btn btn-circle btn-sm bg-success/10 text-success hover:bg-success hover:text-white border-none transition-all z-20"
                             title="Chat on WhatsApp"
                         >
                             <svg 
@@ -259,31 +368,6 @@ export default function TeamMemberCard({ member, onClick, onEdit }: TeamMemberCa
                             </svg>
                         </a>
                     )}
-
-                    {/* Action Buttons */}
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity translate-x-2 group-hover:translate-x-0 duration-300">
-                        {/* Live Tracker Link (Managers only) */}
-                        {canEdit && (
-                            <Link 
-                                href={`/web-tracker?userId=${member.uid}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="btn btn-circle btn-xs btn-ghost hover:bg-base-content/10 hover:text-info transition-colors"
-                                title="View Live Tracker"
-                            >
-                                <Eye size={14} />
-                            </Link>
-                        )}
-                        
-                        {canEdit && (
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); onEdit(); }}
-                                className="btn btn-circle btn-xs btn-ghost hover:bg-base-content/10 hover:text-primary transition-colors"
-                                title="Edit"
-                            >
-                                <Edit2 size={14} />
-                            </button>
-                        )}
-                    </div>
                 </div>
             </div>
             

@@ -13,8 +13,13 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, Calendar, Flag,
   ExternalLink, LinkIcon, FileText, Table2, Camera,
   HardDrive, Globe, Type, Hash, ListFilter, CheckCircle,
-  Sun, Sunrise, CalendarRange, CalendarDays,
+  Sun, Sunrise, CalendarRange, CalendarDays, Repeat, Undo2,
+  ArrowUp, ArrowDown, AlertCircle, Clock, Inbox, Send, User,
 } from 'lucide-react';
+import RequestTaskModal from './RequestTaskModal';
+import TaskRequestsSection from './TaskRequestsSection';
+
+type SectionKey = 'simple' | 'recurring' | 'list';
 
 // ─── Types ──────────────────────────────────────────────────
 interface ColumnOption {
@@ -37,16 +42,37 @@ interface LinkValue {
 interface TaskDoc {
   id: string;
   title: string;
-  type: 'simple' | 'list';
+  type: 'simple' | 'list' | 'recurring';
   status: string;
   priority: string;
   deadline: string;
+  recurrence?: 'daily' | 'weekly' | 'monthly';
+  recurringTime?: string;
+  recurringDays?: string[];
+  recurringDate?: number;
+  lastCompletedAt?: string;
+  lastAutoAdvanced?: string;
+  isOverdueInstance?: boolean;
+  recurringParentId?: string;
+  requestedByUserId?: string;
+  requestedByUserName?: string;
+  deletionPending?: boolean;
+  deletionRequestedBy?: string;
+  deletionRequestedByName?: string;
+  deletionRequestedAt?: string;
   createdAt: Timestamp | null;
   createdBy: string;
   createdByName?: string;
   links?: { title: string; url: string; id: number }[];
   customColumns?: CustomColumn[];
   [key: string]: unknown;
+}
+
+interface SubItem {
+  id: string;
+  title: string;
+  status: string;
+  deadline: string;
 }
 
 interface SubTaskDoc {
@@ -56,6 +82,7 @@ interface SubTaskDoc {
   priority: string;
   deadline: string;
   customFields?: Record<string, unknown>;
+  subItems?: SubItem[];
   [key: string]: unknown;
 }
 
@@ -82,6 +109,50 @@ const COLUMN_TYPES = [
   { value: 'website_link', label: 'Website Link', icon: Globe },
 ];
 
+// ─── Overdue Helper ─────────────────────────────────────────
+const isTaskOverdue = (task: { deadline?: string; status: string }) => {
+  if (!task.deadline || task.status === 'done') return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const deadline = new Date(task.deadline);
+  deadline.setHours(0, 0, 0, 0);
+  return deadline < today;
+};
+
+const getNextRecurringDeadline = (recurrence: string, baseDate: Date, recurringDays?: string[], recurringDate?: number): string => {
+  const d = new Date(baseDate);
+  switch (recurrence) {
+    case 'daily':
+      d.setDate(d.getDate() + 1);
+      break;
+    case 'weekly': {
+      if (recurringDays && recurringDays.length > 0) {
+        const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+        const targets = recurringDays.map(day => dayMap[day]).filter(x => x !== undefined).sort((a, b) => a - b);
+        const current = d.getDay();
+        let found = false;
+        for (const t of targets) {
+          if (t > current) { d.setDate(d.getDate() + (t - current)); found = true; break; }
+        }
+        if (!found) { d.setDate(d.getDate() + (7 - current + targets[0])); }
+      } else {
+        d.setDate(d.getDate() + 7);
+      }
+      break;
+    }
+    case 'monthly': {
+      const target = recurringDate || d.getDate();
+      d.setMonth(d.getMonth() + 1);
+      const max = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      d.setDate(Math.min(target, max));
+      break;
+    }
+    default:
+      d.setDate(d.getDate() + 1);
+  }
+  return d.toISOString().split('T')[0];
+};
+
 // ─── Confirm Modal ──────────────────────────────────────────
 const ConfirmModal: React.FC<{
   isOpen: boolean;
@@ -89,7 +160,9 @@ const ConfirmModal: React.FC<{
   onConfirm: () => void;
   title: string;
   message: string;
-}> = ({ isOpen, onClose, onConfirm, title, message }) => {
+  confirmLabel?: string;
+  confirmClass?: string;
+}> = ({ isOpen, onClose, onConfirm, title, message, confirmLabel = 'Confirm', confirmClass = 'btn-error' }) => {
   if (!isOpen) return null;
   return (
     <div className="modal modal-open">
@@ -98,7 +171,7 @@ const ConfirmModal: React.FC<{
         <p className="py-4 text-sm text-base-content/70">{message}</p>
         <div className="modal-action">
           <button className="btn btn-sm btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-sm btn-error" onClick={() => { onConfirm(); onClose(); }}>Delete</button>
+          <button className={`btn btn-sm ${confirmClass}`} onClick={() => { onConfirm(); onClose(); }}>{confirmLabel}</button>
         </div>
       </div>
       <div className="modal-backdrop" onClick={onClose} />
@@ -807,10 +880,63 @@ const LinksPopover: React.FC<{
   );
 };
 
+// ─── Recurrence Dropdown ────────────────────────────────────
+const RecurrenceDropdown: React.FC<{ value: string; onChange: (val: string) => void }> = ({ value, onChange }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const buttonRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const options = [
+    { value: 'daily', label: 'Daily', icon: Sun },
+    { value: 'weekly', label: 'Weekly', icon: CalendarRange },
+    { value: 'monthly', label: 'Monthly', icon: CalendarDays },
+  ];
+  const current = options.find(o => o.value === value) || options[0];
+
+  const handleOpen = () => {
+    if (buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setPosition({ top: rect.bottom + 4, left: rect.left });
+    }
+    setIsOpen(true);
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node) && buttonRef.current && !buttonRef.current.contains(e.target as Node)) setIsOpen(false);
+    };
+    if (isOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  return (
+    <>
+      <div ref={buttonRef} onClick={handleOpen} className="badge badge-sm badge-accent badge-outline gap-1 cursor-pointer">
+        <current.icon className="w-3 h-3" />{current.label}
+      </div>
+      {isOpen && (
+        <div ref={dropdownRef} className="fixed z-[9999] menu p-1 shadow-xl bg-base-100 rounded-lg w-32 border border-base-200" style={position}>
+          {options.map(o => (
+            <button key={o.value} onClick={() => { onChange(o.value); setIsOpen(false); }} className="flex items-center gap-2 px-3 py-2 rounded hover:bg-base-200 text-xs w-full text-left">
+              <o.icon className="w-3 h-3" /> {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+};
+
 // ═════════════════════════════════════════════════════════════
 // ─── MAIN TASK MANAGER COMPONENT ────────────────────────────
 // ═════════════════════════════════════════════════════════════
-export default function TaskManager() {
+interface TaskManagerProps {
+  targetUserId?: string;
+  targetUserName?: string;
+}
+
+export default function TaskManager({ targetUserId, targetUserName }: TaskManagerProps) {
   const { user, profile } = useAuth();
 
   // State
@@ -820,9 +946,35 @@ export default function TaskManager() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [expandedLists, setExpandedLists] = useState<Set<string>>(new Set());
-  const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+  const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {}, confirmLabel: 'Confirm', confirmClass: 'btn-error' });
   const [columnModalOpen, setColumnModalOpen] = useState(false);
   const [columnModalListId, setColumnModalListId] = useState<string | null>(null);
+  const [simpleTab, setSimpleTab] = useState<'active' | 'completed'>('active');
+  const [recurringTab, setRecurringTab] = useState<'active' | 'completed'>('active');
+  const [listTab, setListTab] = useState<'active' | 'completed'>('active');
+  const [sectionOrder, setSectionOrder] = useState<SectionKey[]>(['simple', 'recurring', 'list']);
+  const [addTaskPopupOpen, setAddTaskPopupOpen] = useState(false);
+  const [expandedListItems, setExpandedListItems] = useState<Set<string>>(new Set());
+  const addTaskPopupRef = useRef<HTMLDivElement>(null);
+  const overdueProcessedRef = useRef(new Set<string>());
+  const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [requestsSectionOpen, setRequestsSectionOpen] = useState(false);
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
+
+  // ─── Listen for pending incoming task requests count ───
+  // Single-field query to avoid composite index requirement; filter client-side
+  useEffect(() => {
+    if (!user) return;
+    const q = query(
+      collection(db, 'task_requests'),
+      where('toUserId', '==', user.uid)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const pendingCount = snap.docs.filter(d => d.data().status === 'pending').length;
+      setPendingRequestCount(pendingCount);
+    });
+    return () => unsub();
+  }, [user]);
 
   // Permissions — role-based
   const isManagerOrAdmin = profile?.role === 'ADMIN' || profile?.role === 'MANAGER';
@@ -855,9 +1007,8 @@ export default function TaskManager() {
     if (!user) { setLoading(false); return; }
 
     const tasksCol = collection(db, 'tasks');
-    const q = isManagerOrAdmin
-      ? query(tasksCol, orderBy('createdAt', 'desc'))
-      : query(tasksCol, where('createdBy', '==', user.uid), orderBy('createdAt', 'desc'));
+    const effectiveUserId = targetUserId || user.uid;
+    const q = query(tasksCol, where('createdBy', '==', effectiveUserId), orderBy('createdAt', 'desc'));
 
     const subUnsubs: (() => void)[] = [];
 
@@ -873,10 +1024,10 @@ export default function TaskManager() {
       subUnsubs.forEach(u => u());
       subUnsubs.length = 0;
 
-      // Subscribe to subtasks for each list task
-      items.filter(t => t.type === 'list').forEach(list => {
+      // Subscribe to subtasks for each list and simple task
+      items.filter(t => t.type === 'list' || t.type === 'simple' || t.type === 'recurring').forEach(task => {
         const subQ = query(
-          collection(db, 'tasks', list.id, 'subtasks'),
+          collection(db, 'tasks', task.id, 'subtasks'),
           orderBy('createdAt', 'asc'),
         );
         const subUnsub = onSnapshot(subQ, (subSnap) => {
@@ -884,7 +1035,7 @@ export default function TaskManager() {
             id: d.id,
             ...d.data(),
           })) as SubTaskDoc[];
-          setSubTasks(prev => ({ ...prev, [list.id]: subs }));
+          setSubTasks(prev => ({ ...prev, [task.id]: subs }));
         });
         subUnsubs.push(subUnsub);
       });
@@ -897,13 +1048,83 @@ export default function TaskManager() {
       unsub();
       subUnsubs.forEach(u => u());
     };
-  }, [user, isManagerOrAdmin]);
+  }, [user, targetUserId]);
 
-  const simpleTasks = tasks.filter(t => t.type === 'simple');
-  const listTasks = tasks.filter(t => t.type === 'list');
+  // ─── Auto-advance overdue recurring tasks ───────────────
+  useEffect(() => {
+    if (!user || loading || tasks.length === 0) return;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+
+    tasks.filter(t => t.type === 'recurring' && t.status !== 'done' && t.deadline).forEach(async (task) => {
+      const deadline = new Date(task.deadline);
+      deadline.setHours(0, 0, 0, 0);
+      if (deadline >= today) return;
+
+      // Guard: already processed in this session
+      const key = `${task.id}_${task.deadline}`;
+      if (overdueProcessedRef.current.has(key)) return;
+      overdueProcessedRef.current.add(key);
+
+      // Guard: already auto-advanced today
+      if (task.lastAutoAdvanced === todayStr) return;
+
+      // Calculate next future deadline
+      let nextDate = new Date(deadline);
+      let iterations = 0;
+      while (nextDate < today && iterations < 365) {
+        const nextStr = getNextRecurringDeadline(task.recurrence || 'daily', nextDate, task.recurringDays, task.recurringDate);
+        nextDate = new Date(nextStr);
+        iterations++;
+      }
+
+      try {
+        // Create overdue simple task for the missed period
+        await addDoc(collection(db, 'tasks'), {
+          title: task.title || 'Untitled Task',
+          type: 'simple',
+          status: 'todo',
+          priority: 'urgent',
+          deadline: task.deadline,
+          createdAt: serverTimestamp(),
+          createdBy: task.createdBy,
+          createdByName: task.createdByName || '',
+          isOverdueInstance: true,
+          recurringParentId: task.id,
+        });
+
+        // Advance the recurring task
+        await updateDoc(doc(db, 'tasks', task.id), {
+          deadline: nextDate.toISOString().split('T')[0],
+          status: 'todo',
+          lastAutoAdvanced: todayStr,
+        });
+      } catch (e) {
+        console.error('Auto-advance recurring task error:', e);
+      }
+    });
+  }, [tasks, user, loading]);
+
+  const allSimple = tasks.filter(t => t.type === 'simple');
+  const allList = tasks.filter(t => t.type === 'list');
+  const allRecurring = tasks.filter(t => t.type === 'recurring');
+
+  const simpleTasks = allSimple.filter(t => simpleTab === 'completed' ? t.status === 'done' : t.status !== 'done');
+  const listTasks = allList.filter(t => listTab === 'completed' ? t.status === 'done' : t.status !== 'done');
+  const recurringTasks = allRecurring.filter(t => recurringTab === 'completed' ? t.status === 'done' : t.status !== 'done');
+
+  const simpleCompletedCount = allSimple.filter(t => t.status === 'done').length;
+  const simpleActiveCount = allSimple.filter(t => t.status !== 'done').length;
+  const recurringCompletedCount = allRecurring.filter(t => t.status === 'done').length;
+  const recurringActiveCount = allRecurring.filter(t => t.status !== 'done').length;
+  const listCompletedCount = allList.filter(t => t.status === 'done').length;
+  const listActiveCount = allList.filter(t => t.status !== 'done').length;
 
   // ─── CRUD ─────────────────────────────────────────────────
   const createSimpleTask = async () => {
+    const effectiveUserId = targetUserId || user!.uid;
+    const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
     await addDoc(collection(db, 'tasks'), {
       title: '',
       type: 'simple',
@@ -911,12 +1132,14 @@ export default function TaskManager() {
       priority: 'normal',
       deadline: '',
       createdAt: serverTimestamp(),
-      createdBy: user!.uid,
-      createdByName: user!.displayName || user!.email || 'Unknown',
+      createdBy: effectiveUserId,
+      createdByName: effectiveUserName,
     });
   };
 
   const createListTask = async () => {
+    const effectiveUserId = targetUserId || user!.uid;
+    const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
     const ref = await addDoc(collection(db, 'tasks'), {
       title: '',
       type: 'list',
@@ -925,10 +1148,57 @@ export default function TaskManager() {
       deadline: '',
       customColumns: [],
       createdAt: serverTimestamp(),
-      createdBy: user!.uid,
-      createdByName: user!.displayName || user!.email || 'Unknown',
+      createdBy: effectiveUserId,
+      createdByName: effectiveUserName,
     });
     setExpandedLists(prev => new Set(prev).add(ref.id));
+  };
+
+  const createRecurringTask = async (recurrence: 'daily' | 'weekly' | 'monthly') => {
+    const effectiveUserId = targetUserId || user!.uid;
+    const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
+    // Set initial deadline based on recurrence
+    const now = new Date();
+    let deadline = '';
+    switch (recurrence) {
+      case 'daily':
+        now.setDate(now.getDate() + 1);
+        break;
+      case 'weekly':
+        now.setDate(now.getDate() + 7);
+        break;
+      case 'monthly':
+        now.setMonth(now.getMonth() + 1);
+        break;
+    }
+    deadline = now.toISOString().split('T')[0];
+    await addDoc(collection(db, 'tasks'), {
+      title: '',
+      type: 'recurring',
+      status: 'todo',
+      priority: 'normal',
+      deadline,
+      recurrence,
+      recurringTime: '',
+      recurringDays: recurrence === 'weekly' ? [] : undefined,
+      recurringDate: recurrence === 'monthly' ? new Date().getDate() : undefined,
+      lastCompletedAt: '',
+      lastAutoAdvanced: '',
+      createdAt: serverTimestamp(),
+      createdBy: effectiveUserId,
+      createdByName: effectiveUserName,
+    });
+  };
+
+  const handleRecurringDone = async (task: TaskDoc) => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const base = task.deadline ? new Date(task.deadline) : new Date();
+    const nextDeadline = getNextRecurringDeadline(task.recurrence || 'daily', base, task.recurringDays, task.recurringDate);
+    await updateTask(task.id, {
+      lastCompletedAt: todayStr,
+      deadline: nextDeadline,
+      status: 'todo',
+    });
   };
 
   const createSubTask = async (listId: string) => {
@@ -951,7 +1221,21 @@ export default function TaskManager() {
   };
 
   const deleteTask = async (taskId: string) => {
-    // Delete subtasks first
+    const task = tasks.find(t => t.id === taskId);
+
+    // Dual-confirm: if task was requested and user is NOT admin/manager,
+    // set deletionPending instead of deleting — requester must approve
+    if (task?.requestedByUserId && !isManagerOrAdmin) {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        deletionPending: true,
+        deletionRequestedBy: user!.uid,
+        deletionRequestedByName: profile?.displayName || profile?.email || 'Unknown',
+        deletionRequestedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // Normal delete (admin/manager or non-requested task)
     const subSnap = await getDocs(collection(db, 'tasks', taskId, 'subtasks'));
     for (const d of subSnap.docs) {
       await deleteDoc(doc(db, 'tasks', taskId, 'subtasks', d.id));
@@ -961,6 +1245,38 @@ export default function TaskManager() {
 
   const deleteSubTask = async (listId: string, subId: string) => {
     await deleteDoc(doc(db, 'tasks', listId, 'subtasks', subId));
+  };
+
+  // ─── List Sub-Items CRUD ────────────────────────────────
+  const addListSubItem = async (listId: string, taskId: string) => {
+    const sub = subTasks[listId]?.find(s => s.id === taskId);
+    if (!sub) return;
+    const newItem: SubItem = { id: `si_${Date.now()}`, title: '', status: 'todo', deadline: '' };
+    await updateDoc(doc(db, 'tasks', listId, 'subtasks', taskId), {
+      subItems: [...(sub.subItems || []), newItem],
+    });
+  };
+
+  const updateListSubItem = async (listId: string, taskId: string, itemId: string, data: Partial<SubItem>) => {
+    const sub = subTasks[listId]?.find(s => s.id === taskId);
+    if (!sub) return;
+    const items = (sub.subItems || []).map(i => i.id === itemId ? { ...i, ...data } : i);
+    await updateDoc(doc(db, 'tasks', listId, 'subtasks', taskId), { subItems: items });
+  };
+
+  const deleteListSubItem = async (listId: string, taskId: string, itemId: string) => {
+    const sub = subTasks[listId]?.find(s => s.id === taskId);
+    if (!sub) return;
+    const items = (sub.subItems || []).filter(i => i.id !== itemId);
+    await updateDoc(doc(db, 'tasks', listId, 'subtasks', taskId), { subItems: items });
+  };
+
+  const toggleListItemExpand = (subId: string) => {
+    setExpandedListItems(prev => {
+      const next = new Set(prev);
+      next.has(subId) ? next.delete(subId) : next.add(subId);
+      return next;
+    });
   };
 
   // ─── Custom Columns ──────────────────────────────────────
@@ -1002,11 +1318,89 @@ export default function TaskManager() {
     });
   };
 
-  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
-    setConfirmModal({ isOpen: true, title, message, onConfirm });
+  const showConfirm = (title: string, message: string, onConfirm: () => void, confirmLabel = 'Confirm', confirmClass = 'btn-error') => {
+    setConfirmModal({ isOpen: true, title, message, onConfirm, confirmLabel, confirmClass });
   };
 
-  const closeConfirm = () => setConfirmModal({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+  const closeConfirm = () => setConfirmModal({ isOpen: false, title: '', message: '', onConfirm: () => {}, confirmLabel: 'Confirm', confirmClass: 'btn-error' });
+
+  const moveSection = (key: SectionKey, direction: 'up' | 'down') => {
+    setSectionOrder(prev => {
+      const idx = prev.indexOf(key);
+      if (direction === 'up' && idx > 0) {
+        const next = [...prev];
+        [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+        return next;
+      }
+      if (direction === 'down' && idx < prev.length - 1) {
+        const next = [...prev];
+        [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+        return next;
+      }
+      return prev;
+    });
+  };
+
+  // Close add-task popup on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (addTaskPopupRef.current && !addTaskPopupRef.current.contains(e.target as Node)) {
+        setAddTaskPopupOpen(false);
+      }
+    };
+    if (addTaskPopupOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [addTaskPopupOpen]);
+
+  // Reusable inline add-task popup
+  const addTaskBtnRef = useRef<HTMLButtonElement>(null);
+  const [popupPos, setPopupPos] = useState<{ top: number; left: number } | null>(null);
+
+  const handleTogglePopup = () => {
+    if (addTaskPopupOpen) {
+      setAddTaskPopupOpen(false);
+      return;
+    }
+    if (addTaskBtnRef.current) {
+      const rect = addTaskBtnRef.current.getBoundingClientRect();
+      const popupH = 260; // approximate popup height
+      const popupW = 192;
+      let top = rect.top - popupH - 8;
+      if (top < 8) top = rect.bottom + 8; // flip below if no room above
+      let left = rect.left + rect.width / 2 - popupW / 2;
+      if (left < 8) left = 8;
+      if (left + popupW > window.innerWidth - 8) left = window.innerWidth - popupW - 8;
+      setPopupPos({ top, left });
+    }
+    setAddTaskPopupOpen(true);
+  };
+
+  const AddTaskPopupButton: React.FC<{ centered?: boolean }> = ({ centered }) => (
+    <div className={centered ? 'flex flex-col items-center justify-center min-h-[50vh]' : 'border border-dashed border-base-300 rounded-lg p-6 flex items-center justify-center'} ref={addTaskPopupRef}>
+      <button
+        ref={addTaskBtnRef}
+        onClick={handleTogglePopup}
+        className={`btn btn-circle ${centered ? 'btn-lg' : 'btn-md'} btn-primary shadow-lg`}
+        title="Add Task"
+      >
+        <Plus className={centered ? 'w-7 h-7' : 'w-5 h-5'} />
+      </button>
+      {centered && <p className="text-sm text-base-content/50 mt-3">Add your first task</p>}
+      {addTaskPopupOpen && popupPos && (
+        <>
+          <div className="fixed inset-0 z-[9998]" onClick={() => setAddTaskPopupOpen(false)} />
+          <div className="fixed z-[9999] menu p-2 shadow-xl bg-base-100 rounded-box w-48 border border-base-200" style={{ top: popupPos.top, left: popupPos.left }}>
+            <button onClick={() => { createSimpleTask(); setAddTaskPopupOpen(false); }} className="flex items-center gap-2 px-3 py-2 rounded hover:bg-base-200 text-sm w-full text-left"><CheckSquare className="w-4 h-4 text-primary" /> Simple Task</button>
+            <button onClick={() => { createListTask(); setAddTaskPopupOpen(false); }} className="flex items-center gap-2 px-3 py-2 rounded hover:bg-base-200 text-sm w-full text-left"><LayoutList className="w-4 h-4 text-secondary" /> List Task</button>
+            <div className="text-xs text-base-content/40 px-3 pt-2 pb-1">Recurring</div>
+            <button onClick={() => { createRecurringTask('daily'); setAddTaskPopupOpen(false); }} className="flex items-center gap-2 px-3 py-2 rounded hover:bg-base-200 text-sm w-full text-left"><Sun className="w-4 h-4 text-accent" /> Daily</button>
+            <button onClick={() => { createRecurringTask('weekly'); setAddTaskPopupOpen(false); }} className="flex items-center gap-2 px-3 py-2 rounded hover:bg-base-200 text-sm w-full text-left"><CalendarRange className="w-4 h-4 text-accent" /> Weekly</button>
+            <button onClick={() => { createRecurringTask('monthly'); setAddTaskPopupOpen(false); }} className="flex items-center gap-2 px-3 py-2 rounded hover:bg-base-200 text-sm w-full text-left"><CalendarDays className="w-4 h-4 text-accent" /> Monthly</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 
   const openColumnModal = (listId: string) => {
     setColumnModalListId(listId);
@@ -1033,34 +1427,58 @@ export default function TaskManager() {
   }
 
   return (
-    <div className="p-3 sm:p-4 md:p-6 bg-base-100 rounded-xl shadow-sm border border-base-200 min-h-[400px] overflow-hidden">
+    <div className="flex flex-col gap-4 h-full overflow-hidden">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6 gap-3">
+      <div className="flex justify-between items-center bg-base-100 p-3 rounded-xl shadow-sm border border-base-200 shrink-0">
         <div>
-          <h2 className="text-lg sm:text-2xl font-bold flex items-center gap-2">
-            <LayoutList className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
-            Task Manager
-          </h2>
-          <p className="text-base-content/60 text-xs sm:text-sm">
-            Click on any field to edit inline
-          </p>
+          <h1 className="text-xl font-bold flex items-center gap-2">
+            <LayoutList className="w-5 h-5 text-primary" />
+            {targetUserName ? `${targetUserName}'s Tasks` : 'Task Manager'}
+          </h1>
+          <p className="text-xs text-base-content/60 mt-0.5">Click on any field to edit inline</p>
         </div>
         {canAddTasks && (
-          <div className="flex gap-2 flex-wrap w-full sm:w-auto">
-            <button onClick={createSimpleTask} className="btn btn-xs sm:btn-sm btn-outline gap-1 sm:gap-2 flex-1 sm:flex-none">
-              <CheckSquare className="w-3 h-3 sm:w-4 sm:h-4" />
-              <span className="hidden xs:inline">+</span> Simple
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setRequestsSectionOpen(prev => !prev)}
+              className={`btn btn-sm gap-2 relative ${requestsSectionOpen ? 'btn-primary' : 'btn-ghost'}`}
+              title="Task Requests"
+            >
+              <Inbox className="w-4 h-4" />
+              Requests
+              {pendingRequestCount > 0 && (
+                <span className="badge badge-xs badge-warning">{pendingRequestCount}</span>
+              )}
             </button>
-            <button onClick={createListTask} className="btn btn-xs sm:btn-sm btn-primary gap-1 sm:gap-2 flex-1 sm:flex-none">
-              <LayoutList className="w-3 h-3 sm:w-4 sm:h-4" />
-              <span className="hidden xs:inline">+</span> List
+            <button
+              onClick={() => setRequestModalOpen(true)}
+              className="btn btn-sm btn-ghost gap-2"
+              title="Request Task"
+            >
+              <Send className="w-4 h-4" />
+              Request Task
             </button>
+            <div className="dropdown dropdown-end">
+            <div tabIndex={0} role="button" className="btn btn-sm btn-primary gap-2">
+              <Plus className="w-4 h-4" />
+              Add Task
+              <ChevronDown className="w-3 h-3" />
+            </div>
+            <ul tabIndex={0} className="dropdown-content z-[1] menu p-2 shadow-lg bg-base-100 rounded-box w-48 border border-base-200">
+              <li><button onClick={() => { createSimpleTask(); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><CheckSquare className="w-4 h-4 text-primary" /> Simple Task</button></li>
+              <li><button onClick={() => { createListTask(); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><LayoutList className="w-4 h-4 text-secondary" /> List Task</button></li>
+              <li className="menu-title text-xs mt-1 mb-0.5">Recurring</li>
+              <li><button onClick={() => { createRecurringTask('daily'); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><Sun className="w-4 h-4 text-accent" /> Daily</button></li>
+              <li><button onClick={() => { createRecurringTask('weekly'); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /> Weekly</button></li>
+              <li><button onClick={() => { createRecurringTask('monthly'); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><CalendarDays className="w-4 h-4 text-accent" /> Monthly</button></li>
+            </ul>
+          </div>
           </div>
         )}
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-2 sm:gap-3 mb-4 sm:mb-6 items-center bg-base-200/50 p-2 sm:p-3 rounded-lg">
+      <div className="flex flex-wrap gap-2 sm:gap-3 items-center bg-base-200/50 p-2 sm:p-3 rounded-lg shrink-0">
         <div className="relative flex-1 min-w-[140px] sm:min-w-[200px]">
           <Search className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 text-base-content/50" />
           <input type="text" placeholder="Search tasks..." className="input input-xs sm:input-sm input-bordered w-full pl-7 sm:pl-9" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
@@ -1074,30 +1492,54 @@ export default function TaskManager() {
         </select>
       </div>
 
+      {/* Inline Requests Section */}
+      <TaskRequestsSection
+        isOpen={requestsSectionOpen}
+        onSendRequest={() => setRequestModalOpen(true)}
+      />
+
       {loading ? (
         <div className="flex justify-center py-12">
           <span className="loading loading-spinner loading-lg text-primary"></span>
         </div>
       ) : (
-        <div className="space-y-6 sm:space-y-8">
-          {/* ===== SIMPLE TASKS ===== */}
-          {simpleTasks.length > 0 && (
-            <div className="overflow-hidden">
+        <div className="flex-1 overflow-y-auto space-y-6 sm:space-y-8">
+          {sectionOrder.map((sectionKey, sectionIdx) => {
+            // ===== SIMPLE TASKS =====
+            if (sectionKey === 'simple' && allSimple.length > 0) return (
+            <div key="simple" className="overflow-hidden">
               <div className="flex items-center gap-2 mb-2 sm:mb-3">
                 <CheckSquare className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
                 <h3 className="font-semibold text-base sm:text-lg">Simple Tasks</h3>
-                <span className="badge badge-xs sm:badge-sm badge-ghost">{simpleTasks.length}</span>
+                <div className="flex items-center gap-1 ml-auto">
+                  <button onClick={() => moveSection('simple', 'up')} disabled={sectionIdx === 0} className="btn btn-ghost btn-xs btn-circle disabled:opacity-20" title="Move up"><ArrowUp className="w-3 h-3" /></button>
+                  <button onClick={() => moveSection('simple', 'down')} disabled={sectionIdx === sectionOrder.length - 1} className="btn btn-ghost btn-xs btn-circle disabled:opacity-20" title="Move down"><ArrowDown className="w-3 h-3" /></button>
+                  <div className="w-px h-4 bg-base-300 mx-1"></div>
+                  <div className="flex gap-1">
+                    <button onClick={() => setSimpleTab('active')} className={`btn btn-xs ${simpleTab === 'active' ? 'btn-primary' : 'btn-ghost'}`}>
+                      Active <span className="badge badge-xs ml-1">{simpleActiveCount}</span>
+                    </button>
+                    <button onClick={() => setSimpleTab('completed')} className={`btn btn-xs ${simpleTab === 'completed' ? 'btn-success' : 'btn-ghost'}`}>
+                      Completed <span className="badge badge-xs ml-1">{simpleCompletedCount}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
+              {filterTasks(simpleTasks).length === 0 ? (
+                <div className="text-center py-6 text-base-content/40 italic border border-base-200 rounded-lg">
+                  {simpleTab === 'completed' ? 'No completed simple tasks' : 'No active simple tasks'}
+                </div>
+              ) : (
               <div className="overflow-x-auto border border-base-200 rounded-lg">
                 <table className="table table-xs sm:table-sm w-full min-w-[400px]">
                   <thead className="bg-base-200/50">
                     <tr>
+                      <th className="w-6 sm:w-8"></th>
                       <th className="w-8 sm:w-10"></th>
                       <th className="min-w-[120px]">Task Name</th>
                       <th className="w-24 sm:w-32 min-w-[96px]">Status</th>
                       <th className="w-32 sm:w-36 min-w-[100px]">Due Date</th>
-                      {isManagerOrAdmin && <th className="w-28 min-w-[100px]">Created By</th>}
                       <th className="w-8 sm:w-10"></th>
                     </tr>
                   </thead>
@@ -1106,8 +1548,17 @@ export default function TaskManager() {
                       const taskEditable = canEditTask(task);
                       const taskDeletable = canDeleteTask(task);
                       const taskStatusChangeable = canChangeTaskStatus(task);
+                      const taskSubs = subTasks[task.id] || [];
+                      const isExpanded = expandedLists.has(task.id);
+                      const overdue = isTaskOverdue(task);
                       return (
-                      <tr key={task.id} className="hover group">
+                      <React.Fragment key={task.id}>
+                      <tr className={`hover group ${overdue ? 'bg-error/5' : ''}`}>
+                        <td className="px-1">
+                          <button onClick={() => toggleListExpand(task.id)} className="btn btn-ghost btn-xs btn-circle">
+                            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                          </button>
+                        </td>
                         <td>
                           <input
                             type="checkbox"
@@ -1118,18 +1569,31 @@ export default function TaskManager() {
                           />
                         </td>
                         <td>
-                          {taskEditable ? (
-                            <EditableCell
-                              value={task.title}
-                              onSave={val => updateTask(task.id, { title: val })}
-                              placeholder="Enter task name..."
-                              className={task.status === 'done' ? 'line-through opacity-50' : ''}
-                            />
-                          ) : (
-                            <span className={`px-2 py-1 ${task.status === 'done' ? 'line-through opacity-50' : ''}`}>
-                              {task.title || 'Untitled Task'}
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {taskEditable ? (
+                              <EditableCell
+                                value={task.title}
+                                onSave={val => updateTask(task.id, { title: val })}
+                                placeholder="Enter task name..."
+                                className={task.status === 'done' ? 'line-through opacity-50' : ''}
+                              />
+                            ) : (
+                              <span className={`px-2 py-1 ${task.status === 'done' ? 'line-through opacity-50' : ''}`}>
+                                {task.title || 'Untitled Task'}
+                              </span>
+                            )}
+                            {task.requestedByUserName && (
+                              <div className="tooltip tooltip-top" data-tip={`Requested by ${task.requestedByUserName}`}>
+                                <span className="badge badge-xs gap-1 badge-accent badge-outline cursor-default">
+                                  <User className="w-2.5 h-2.5" />
+                                  {task.requestedByUserName.split(' ')[0]}
+                                </span>
+                              </div>
+                            )}
+                            {taskSubs.length > 0 && (
+                              <span className="badge badge-xs badge-primary/20 text-primary">{taskSubs.filter(s => s.status === 'done').length}/{taskSubs.length}</span>
+                            )}
+                          </div>
                         </td>
                         <td>
                           {taskStatusChangeable ? (
@@ -1141,54 +1605,420 @@ export default function TaskManager() {
                           )}
                         </td>
                         <td>
+                          <div className="flex items-center gap-1">
                           {taskEditable ? (
                             <DatePickerPopover value={task.deadline} onSave={val => updateTask(task.id, { deadline: val })} placeholder="Set date" className="text-xs" />
                           ) : (
                             <span className="text-xs sm:text-sm px-2">{task.deadline ? new Date(task.deadline).toLocaleDateString() : '-'}</span>
                           )}
+                          {overdue && <span className="badge badge-xs badge-error gap-1"><AlertCircle className="w-2.5 h-2.5" />Overdue</span>}
+                          </div>
                         </td>
-                        {isManagerOrAdmin && (
-                          <td>
-                            <span className="text-xs text-base-content/60 truncate block max-w-[100px]" title={task.createdByName || 'Unknown'}>
-                              {task.createdByName || 'Unknown'}
-                            </span>
-                          </td>
-                        )}
                         <td>
-                          {taskDeletable && (
+                          {task.deletionPending ? (
+                            <span className="badge badge-xs badge-error gap-1 whitespace-nowrap" title="Waiting for requester approval">
+                              <Clock className="w-2.5 h-2.5" />Deletion Pending
+                            </span>
+                          ) : taskDeletable ? (
                             <button
-                              onClick={() => showConfirm('Delete Task', `Are you sure you want to delete "${task.title}"?`, () => deleteTask(task.id))}
+                              onClick={() => showConfirm('Delete Task', task.requestedByUserId && !isManagerOrAdmin ? `"${task.title}" was requested by ${task.requestedByUserName}. A deletion request will be sent for approval.` : `Are you sure you want to delete "${task.title}"?`, () => deleteTask(task.id), task.requestedByUserId && !isManagerOrAdmin ? 'Request Deletion' : 'Delete')}
                               className="btn btn-ghost btn-xs text-error opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
                             >
                               <Trash2 className="w-3 h-3 sm:w-4 sm:h-4" />
                             </button>
+                          ) : null}
+                          {simpleTab === 'completed' && taskStatusChangeable && (
+                            <button
+                              onClick={() => updateTask(task.id, { status: 'todo' })}
+                              className="btn btn-ghost btn-xs text-primary opacity-60 sm:opacity-0 sm:group-hover:opacity-100"
+                              title="Restore to active"
+                            >
+                              <Undo2 className="w-3 h-3 sm:w-4 sm:h-4" />
+                            </button>
                           )}
                         </td>
                       </tr>
+                      {/* Subtasks for this simple task */}
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={6} className="p-0 bg-base-200/20">
+                            <div className="ml-8 sm:ml-12 pl-4 pr-2 py-2 border-l-2 border-primary/20">
+                              {taskSubs.length > 0 && (
+                                <table className="table table-xs w-full">
+                                  <tbody>
+                                    {taskSubs.map(sub => (
+                                      <tr key={sub.id} className="hover group/sub">
+                                        <td className="w-8">
+                                          <input type="checkbox" className="checkbox checkbox-xs checkbox-primary" checked={sub.status === 'done'} onChange={() => taskStatusChangeable && updateSubTask(task.id, sub.id, { status: sub.status === 'done' ? 'todo' : 'done' })} disabled={!taskStatusChangeable} />
+                                        </td>
+                                        <td>
+                                          {taskEditable ? (
+                                            <EditableCell value={sub.title} onSave={val => updateSubTask(task.id, sub.id, { title: val })} placeholder="Subtask name..." className={`text-sm ${sub.status === 'done' ? 'line-through opacity-50' : ''}`} />
+                                          ) : (
+                                            <span className={`text-sm px-2 ${sub.status === 'done' ? 'line-through opacity-50' : ''}`}>{sub.title || 'Untitled Subtask'}</span>
+                                          )}
+                                        </td>
+                                        <td className="w-24">
+                                          {taskStatusChangeable ? (
+                                            <StatusDropdown value={sub.status} onChange={val => updateSubTask(task.id, sub.id, { status: val })} />
+                                          ) : (
+                                            <span className={`badge badge-sm ${sub.status === 'done' ? 'badge-success' : sub.status === 'in_progress' ? 'badge-warning' : sub.status === 'review' ? 'badge-info' : 'badge-ghost'}`}>
+                                              {sub.status === 'in_progress' ? 'In Progress' : sub.status?.charAt(0).toUpperCase() + sub.status?.slice(1) || 'To Do'}
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="w-28">
+                                          {taskEditable ? (
+                                            <DatePickerPopover value={sub.deadline} onSave={val => updateSubTask(task.id, sub.id, { deadline: val })} placeholder="Set date" className="text-xs" />
+                                          ) : (
+                                            <span className="text-xs px-2">{sub.deadline ? new Date(sub.deadline).toLocaleDateString() : '-'}</span>
+                                          )}
+                                        </td>
+                                        <td className="w-8">
+                                          {taskDeletable && (
+                                            <button onClick={() => showConfirm('Delete Subtask', `Are you sure you want to delete "${sub.title}"?`, () => deleteSubTask(task.id, sub.id), 'Delete')} className="btn btn-ghost btn-xs text-error opacity-0 group-hover/sub:opacity-100">
+                                              <Trash2 className="w-3 h-3" />
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                              {canAddTasks && (
+                                <button onClick={() => createSubTask(task.id)} className="btn btn-ghost btn-xs w-full mt-1 text-primary border-dashed border border-base-300 hover:border-primary">
+                                  <Plus className="w-3 h-3" /> Add Subtask
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
+              )}
 
-          {/* ===== LIST TASKS ===== */}
-          {listTasks.length > 0 && (
-            <div className="overflow-hidden">
+              {canAddTasks && (
+                <button onClick={createSimpleTask} className="btn btn-ghost btn-xs w-full mt-2 text-primary border-dashed border border-base-300 hover:border-primary">
+                  <Plus className="w-3 h-3" /> Add Simple Task
+                </button>
+              )}
+            </div>
+          );
+
+            // ===== RECURRING TASKS =====
+            if (sectionKey === 'recurring' && allRecurring.length > 0) return (
+            <div key="recurring" className="overflow-hidden">
+              <div className="flex items-center gap-2 mb-2 sm:mb-3">
+                <Repeat className="w-4 h-4 sm:w-5 sm:h-5 text-accent" />
+                <h3 className="font-semibold text-base sm:text-lg">Recurring Tasks</h3>
+                <div className="flex items-center gap-1 ml-auto">
+                  <button onClick={() => moveSection('recurring', 'up')} disabled={sectionIdx === 0} className="btn btn-ghost btn-xs btn-circle disabled:opacity-20" title="Move up"><ArrowUp className="w-3 h-3" /></button>
+                  <button onClick={() => moveSection('recurring', 'down')} disabled={sectionIdx === sectionOrder.length - 1} className="btn btn-ghost btn-xs btn-circle disabled:opacity-20" title="Move down"><ArrowDown className="w-3 h-3" /></button>
+                  <div className="w-px h-4 bg-base-300 mx-1"></div>
+                  <div className="flex gap-1">
+                    <button onClick={() => setRecurringTab('active')} className={`btn btn-xs ${recurringTab === 'active' ? 'btn-accent' : 'btn-ghost'}`}>
+                      Active <span className="badge badge-xs ml-1">{recurringActiveCount}</span>
+                    </button>
+                    <button onClick={() => setRecurringTab('completed')} className={`btn btn-xs ${recurringTab === 'completed' ? 'btn-success' : 'btn-ghost'}`}>
+                      Completed <span className="badge badge-xs ml-1">{recurringCompletedCount}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {filterTasks(recurringTasks).length === 0 ? (
+                <div className="text-center py-6 text-base-content/40 italic border border-base-200 rounded-lg">
+                  {recurringTab === 'completed' ? 'No completed recurring tasks' : 'No active recurring tasks'}
+                </div>
+              ) : (
+              <div className="overflow-x-auto border border-base-200 rounded-lg">
+                <table className="table table-xs sm:table-sm w-full min-w-[500px]">
+                  <thead className="bg-base-200/50">
+                    <tr>
+                      <th className="w-6 sm:w-8"></th>
+                      <th className="w-8 sm:w-10"></th>
+                      <th className="min-w-[120px]">Task Name</th>
+                      <th className="w-24 sm:w-28">Frequency</th>
+                      <th className="w-24 sm:w-32 min-w-[96px]">Status</th>
+                      <th className="w-32 sm:w-36 min-w-[100px]">Next Due</th>
+                      <th className="w-32 sm:w-36 min-w-[100px]">Last Done</th>
+                      <th className="w-8 sm:w-10"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filterTasks(recurringTasks).map(task => {
+                      const taskEditable = canEditTask(task);
+                      const taskDeletable = canDeleteTask(task);
+                      const taskStatusChangeable = canChangeTaskStatus(task);
+                      const taskSubs = subTasks[task.id] || [];
+                      const isExpanded = expandedLists.has(task.id);
+                      const overdue = isTaskOverdue(task);
+                      return (
+                      <React.Fragment key={task.id}>
+                      <tr className={`hover group ${overdue ? 'bg-error/5' : ''}`}>
+                        <td className="px-1">
+                          <button onClick={() => toggleListExpand(task.id)} className="btn btn-ghost btn-xs btn-circle">
+                            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                          </button>
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => taskStatusChangeable && showConfirm(
+                              'Complete Recurring Task',
+                              `Mark "${task.title || 'Untitled Task'}" as done for this ${task.recurrence || 'period'}? It will reset and the next due date will be set automatically.`,
+                              () => handleRecurringDone(task),
+                              'Complete',
+                              'btn-success'
+                            )}
+                            className="btn btn-ghost btn-xs btn-circle text-accent hover:bg-accent/10"
+                            title="Mark done for this period"
+                            disabled={!taskStatusChangeable}
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                          </button>
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-1">
+                            {taskEditable ? (
+                              <EditableCell value={task.title} onSave={val => updateTask(task.id, { title: val })} placeholder="Enter task name..." />
+                            ) : (
+                              <span className="px-2 py-1">{task.title || 'Untitled Task'}</span>
+                            )}
+                            {task.requestedByUserName && (
+                              <div className="tooltip tooltip-top" data-tip={`Requested by ${task.requestedByUserName}`}>
+                                <span className="badge badge-xs gap-1 badge-accent badge-outline cursor-default">
+                                  <User className="w-2.5 h-2.5" />
+                                  {task.requestedByUserName.split(' ')[0]}
+                                </span>
+                              </div>
+                            )}
+                            {taskSubs.length > 0 && (
+                              <span className="badge badge-xs badge-accent/20 text-accent">{taskSubs.filter(s => s.status === 'done').length}/{taskSubs.length}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <div>
+                            {taskEditable ? (
+                              <RecurrenceDropdown value={task.recurrence || 'daily'} onChange={val => updateTask(task.id, { recurrence: val as 'daily' | 'weekly' | 'monthly' })} />
+                            ) : (
+                              <span className="badge badge-sm badge-accent badge-outline">
+                                {task.recurrence?.charAt(0).toUpperCase() + (task.recurrence?.slice(1) || '')}
+                              </span>
+                            )}
+                            <div className="text-[10px] text-base-content/40 mt-0.5">
+                              {task.recurrence === 'daily' && task.recurringTime && `at ${task.recurringTime}`}
+                              {task.recurrence === 'weekly' && (task.recurringDays || []).length > 0 && (task.recurringDays || []).join(', ')}
+                              {task.recurrence === 'monthly' && task.recurringDate ? `Day ${task.recurringDate}` : ''}
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          {taskStatusChangeable ? (
+                            <StatusDropdown value={task.status} onChange={val => updateTask(task.id, { status: val })} />
+                          ) : (
+                            <span className={`badge badge-sm ${task.status === 'done' ? 'badge-success' : task.status === 'in_progress' ? 'badge-warning' : task.status === 'review' ? 'badge-info' : 'badge-ghost'}`}>
+                              {task.status === 'in_progress' ? 'In Progress' : task.status?.charAt(0).toUpperCase() + task.status?.slice(1) || 'To Do'}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-1">
+                            {taskEditable ? (
+                              <DatePickerPopover value={task.deadline} onSave={val => updateTask(task.id, { deadline: val })} placeholder="Set date" className="text-xs" />
+                            ) : (
+                              <span className="text-xs sm:text-sm px-2">{task.deadline ? new Date(task.deadline).toLocaleDateString() : '-'}</span>
+                            )}
+                            {overdue && <span className="badge badge-xs badge-error gap-1"><AlertCircle className="w-2.5 h-2.5" />Overdue</span>}
+                          </div>
+                        </td>
+                        <td>
+                          <span className="text-xs text-base-content/60">
+                            {task.lastCompletedAt ? new Date(task.lastCompletedAt).toLocaleDateString() : 'Never'}
+                          </span>
+                        </td>
+                        <td>
+                          {task.deletionPending ? (
+                            <span className="badge badge-xs badge-error gap-1 whitespace-nowrap" title="Waiting for requester approval">
+                              <Clock className="w-2.5 h-2.5" />Deletion Pending
+                            </span>
+                          ) : taskDeletable ? (
+                            <button onClick={() => showConfirm('Delete Task', task.requestedByUserId && !isManagerOrAdmin ? `"${task.title}" was requested by ${task.requestedByUserName}. A deletion request will be sent for approval.` : `Delete "${task.title}"?`, () => deleteTask(task.id), task.requestedByUserId && !isManagerOrAdmin ? 'Request Deletion' : 'Delete')} className="btn btn-ghost btn-xs text-error opacity-60 sm:opacity-0 sm:group-hover:opacity-100">
+                              <Trash2 className="w-3 h-3 sm:w-4 sm:h-4" />
+                            </button>
+                          ) : null}
+                          {recurringTab === 'completed' && taskStatusChangeable && (
+                            <button onClick={() => updateTask(task.id, { status: 'todo' })} className="btn btn-ghost btn-xs text-primary opacity-60 sm:opacity-0 sm:group-hover:opacity-100" title="Restore to active">
+                              <Undo2 className="w-3 h-3 sm:w-4 sm:h-4" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                      {/* Expanded: Schedule Details + Subtasks */}
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={8} className="p-0 bg-base-200/20">
+                            <div className="ml-8 sm:ml-12 pl-4 pr-2 py-3 space-y-3 border-l-2 border-accent/20">
+                              {/* Schedule Details */}
+                              <div className="flex items-center gap-3 flex-wrap text-sm border-b border-base-200 pb-3">
+                                <span className="text-xs font-medium text-base-content/60 flex items-center gap-1"><Clock className="w-3 h-3" /> Schedule:</span>
+                                {task.recurrence === 'daily' && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-base-content/50">Every day at</span>
+                                    {taskEditable ? (
+                                      <input type="time" className="input input-xs input-bordered w-28" value={task.recurringTime || ''} onChange={e => updateTask(task.id, { recurringTime: e.target.value })} />
+                                    ) : (
+                                      <span className="text-xs font-medium">{task.recurringTime || 'Not set'}</span>
+                                    )}
+                                  </div>
+                                )}
+                                {task.recurrence === 'weekly' && (
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    <span className="text-xs text-base-content/50 mr-1">On:</span>
+                                    {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => (
+                                      taskEditable ? (
+                                        <button key={day}
+                                          onClick={() => {
+                                            const current = task.recurringDays || [];
+                                            const next = current.includes(day) ? current.filter((d: string) => d !== day) : [...current, day];
+                                            updateTask(task.id, { recurringDays: next });
+                                          }}
+                                          className={`btn btn-xs ${(task.recurringDays || []).includes(day) ? 'btn-accent' : 'btn-ghost border-base-300'}`}
+                                        >{day}</button>
+                                      ) : (
+                                        <span key={day} className={`badge badge-xs ${(task.recurringDays || []).includes(day) ? 'badge-accent' : 'badge-ghost'}`}>{day}</span>
+                                      )
+                                    ))}
+                                  </div>
+                                )}
+                                {task.recurrence === 'monthly' && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-base-content/50">On day</span>
+                                    {taskEditable ? (
+                                      <input type="number" min={1} max={31} className="input input-xs input-bordered w-16" value={task.recurringDate || ''} onChange={e => updateTask(task.id, { recurringDate: parseInt(e.target.value) || 0 })} placeholder="1-31" />
+                                    ) : (
+                                      <span className="text-xs font-medium">{task.recurringDate || 'Not set'}</span>
+                                    )}
+                                    <span className="text-xs text-base-content/50">of every month</span>
+                                  </div>
+                                )}
+                              </div>
+                              {/* Subtasks */}
+                              {taskSubs.length > 0 && (
+                                <table className="table table-xs w-full">
+                                  <tbody>
+                                    {taskSubs.map(sub => (
+                                      <tr key={sub.id} className="hover group/sub">
+                                        <td className="w-8">
+                                          <input type="checkbox" className="checkbox checkbox-xs checkbox-accent" checked={sub.status === 'done'} onChange={() => taskStatusChangeable && updateSubTask(task.id, sub.id, { status: sub.status === 'done' ? 'todo' : 'done' })} disabled={!taskStatusChangeable} />
+                                        </td>
+                                        <td>
+                                          {taskEditable ? (
+                                            <EditableCell value={sub.title} onSave={val => updateSubTask(task.id, sub.id, { title: val })} placeholder="Subtask name..." className={`text-sm ${sub.status === 'done' ? 'line-through opacity-50' : ''}`} />
+                                          ) : (
+                                            <span className={`text-sm px-2 ${sub.status === 'done' ? 'line-through opacity-50' : ''}`}>{sub.title || 'Untitled Subtask'}</span>
+                                          )}
+                                        </td>
+                                        <td className="w-24">
+                                          {taskStatusChangeable ? (
+                                            <StatusDropdown value={sub.status} onChange={val => updateSubTask(task.id, sub.id, { status: val })} />
+                                          ) : (
+                                            <span className={`badge badge-sm ${sub.status === 'done' ? 'badge-success' : sub.status === 'in_progress' ? 'badge-warning' : sub.status === 'review' ? 'badge-info' : 'badge-ghost'}`}>
+                                              {sub.status === 'in_progress' ? 'In Progress' : sub.status?.charAt(0).toUpperCase() + sub.status?.slice(1) || 'To Do'}
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="w-28">
+                                          {taskEditable ? (
+                                            <DatePickerPopover value={sub.deadline} onSave={val => updateSubTask(task.id, sub.id, { deadline: val })} placeholder="Set date" className="text-xs" />
+                                          ) : (
+                                            <span className="text-xs px-2">{sub.deadline ? new Date(sub.deadline).toLocaleDateString() : '-'}</span>
+                                          )}
+                                        </td>
+                                        <td className="w-8">
+                                          {taskDeletable && (
+                                            <button onClick={() => showConfirm('Delete Subtask', `Delete "${sub.title}"?`, () => deleteSubTask(task.id, sub.id), 'Delete')} className="btn btn-ghost btn-xs text-error opacity-0 group-hover/sub:opacity-100">
+                                              <Trash2 className="w-3 h-3" />
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                              {canAddTasks && (
+                                <button onClick={() => createSubTask(task.id)} className="btn btn-ghost btn-xs w-full mt-1 text-accent border-dashed border border-base-300 hover:border-accent">
+                                  <Plus className="w-3 h-3" /> Add Subtask
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              )}
+
+              {canAddTasks && (
+                <div className="dropdown dropdown-top mt-2">
+                  <div tabIndex={0} role="button" className="btn btn-ghost btn-xs w-full text-accent border-dashed border border-base-300 hover:border-accent">
+                    <Plus className="w-3 h-3" /> Add Recurring Task
+                  </div>
+                  <ul tabIndex={0} className="dropdown-content z-[1] menu p-2 shadow-lg bg-base-100 rounded-box w-40 border border-base-200 mb-1">
+                    <li><button onClick={() => { createRecurringTask('daily'); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><Sun className="w-4 h-4" /> Daily</button></li>
+                    <li><button onClick={() => { createRecurringTask('weekly'); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><CalendarRange className="w-4 h-4" /> Weekly</button></li>
+                    <li><button onClick={() => { createRecurringTask('monthly'); (document.activeElement as HTMLElement)?.blur(); }} className="flex items-center gap-2"><CalendarDays className="w-4 h-4" /> Monthly</button></li>
+                  </ul>
+                </div>
+              )}
+            </div>
+          );
+
+            // ===== LIST TASKS =====
+            if (sectionKey === 'list' && allList.length > 0) return (
+            <div key="list" className="overflow-hidden">
               <div className="flex items-center gap-2 mb-2 sm:mb-3">
                 <LayoutList className="w-4 h-4 sm:w-5 sm:h-5 text-secondary" />
                 <h3 className="font-semibold text-base sm:text-lg">List Tasks</h3>
-                <span className="badge badge-xs sm:badge-sm badge-ghost">{listTasks.length}</span>
+                <div className="flex items-center gap-1 ml-auto">
+                  <button onClick={() => moveSection('list', 'up')} disabled={sectionIdx === 0} className="btn btn-ghost btn-xs btn-circle disabled:opacity-20" title="Move up"><ArrowUp className="w-3 h-3" /></button>
+                  <button onClick={() => moveSection('list', 'down')} disabled={sectionIdx === sectionOrder.length - 1} className="btn btn-ghost btn-xs btn-circle disabled:opacity-20" title="Move down"><ArrowDown className="w-3 h-3" /></button>
+                  <div className="w-px h-4 bg-base-300 mx-1"></div>
+                  <div className="flex gap-1">
+                    <button onClick={() => setListTab('active')} className={`btn btn-xs ${listTab === 'active' ? 'btn-secondary' : 'btn-ghost'}`}>
+                      Active <span className="badge badge-xs ml-1">{listActiveCount}</span>
+                    </button>
+                    <button onClick={() => setListTab('completed')} className={`btn btn-xs ${listTab === 'completed' ? 'btn-success' : 'btn-ghost'}`}>
+                      Completed <span className="badge badge-xs ml-1">{listCompletedCount}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
+              {filterTasks(listTasks).length === 0 ? (
+                <div className="text-center py-6 text-base-content/40 italic border border-base-200 rounded-lg">
+                  {listTab === 'completed' ? 'No completed list tasks' : 'No active list tasks'}
+                </div>
+              ) : (
               <div className="space-y-3 sm:space-y-4">
                 {filterTasks(listTasks).map(list => {
                   const listEditable = canEditTask(list);
                   const listDeletable = canDeleteTask(list);
                   const listStatusChangeable = canChangeTaskStatus(list);
+                  const listOverdue = isTaskOverdue(list);
                   return (
-                  <div key={list.id} className="border border-base-200 rounded-lg overflow-hidden bg-base-100 shadow-sm">
+                  <div key={list.id} className={`border rounded-lg overflow-hidden bg-base-100 shadow-sm ${listOverdue ? 'border-error/30' : 'border-base-200'}`}>
                     {/* List Header */}
                     <div className="bg-base-200/30 p-2 sm:p-3 border-b border-base-200 overflow-x-auto">
                       <div className="flex items-center gap-2 sm:gap-3 min-w-max">
@@ -1197,11 +2027,21 @@ export default function TaskManager() {
                         </button>
 
                         <div className="flex-1 min-w-[100px] sm:min-w-[150px]">
+                          <div className="flex items-center gap-1">
                           {listEditable ? (
                             <EditableCell value={list.title} onSave={val => updateTask(list.id, { title: val })} placeholder="List name..." className="font-semibold text-sm sm:text-base" />
                           ) : (
                             <span className="font-semibold text-sm sm:text-base px-2">{list.title || 'Untitled List'}</span>
                           )}
+                          {list.requestedByUserName && (
+                            <div className="tooltip tooltip-top" data-tip={`Requested by ${list.requestedByUserName}`}>
+                              <span className="badge badge-xs gap-1 badge-accent badge-outline cursor-default">
+                                <User className="w-2.5 h-2.5" />
+                                {list.requestedByUserName.split(' ')[0]}
+                              </span>
+                            </div>
+                          )}
+                          </div>
                         </div>
 
                         <div className="flex-shrink-0">
@@ -1224,40 +2064,49 @@ export default function TaskManager() {
                           )}
                         </div>
 
-                        <div className="flex-shrink-0">
+                        <div className="flex-shrink-0 flex items-center gap-1">
                           {listEditable ? (
                             <DatePickerPopover value={list.deadline} onSave={val => updateTask(list.id, { deadline: val })} placeholder="Due date" className="text-xs" />
                           ) : (
                             <span className="text-xs px-2">{list.deadline ? new Date(list.deadline).toLocaleDateString() : '-'}</span>
                           )}
+                          {listOverdue && <span className="badge badge-xs badge-error gap-1"><AlertCircle className="w-2.5 h-2.5" />Overdue</span>}
                         </div>
 
-                        {listDeletable && (
+                        {list.deletionPending ? (
+                          <span className="badge badge-xs badge-error gap-1 whitespace-nowrap flex-shrink-0" title="Waiting for requester approval">
+                            <Clock className="w-2.5 h-2.5" />Deletion Pending
+                          </span>
+                        ) : listDeletable ? (
                           <button
-                            onClick={() => showConfirm('Delete List', `Are you sure you want to delete "${list.title}" and all its subtasks?`, () => deleteTask(list.id))}
+                            onClick={() => showConfirm('Delete List', list.requestedByUserId && !isManagerOrAdmin ? `"${list.title}" was requested by ${list.requestedByUserName}. A deletion request will be sent for approval.` : `Are you sure you want to delete "${list.title}" and all its tasks?`, () => deleteTask(list.id), list.requestedByUserId && !isManagerOrAdmin ? 'Request Deletion' : 'Delete')}
                             className="btn btn-ghost btn-xs text-error flex-shrink-0"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
-                        )}
-
-                        {isManagerOrAdmin && list.createdByName && (
-                          <span className="text-[10px] text-base-content/40 flex-shrink-0" title={`Created by ${list.createdByName}`}>
-                            by {list.createdByName}
-                          </span>
+                        ) : null}
+                        {listTab === 'completed' && (
+                          <button
+                            onClick={() => updateTask(list.id, { status: 'todo' })}
+                            className="btn btn-ghost btn-xs text-primary flex-shrink-0"
+                            title="Restore to active"
+                          >
+                            <Undo2 className="w-4 h-4" />
+                          </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Subtasks Table */}
+                    {/* Tasks Table */}
                     {expandedLists.has(list.id) && (
                       <div className="p-2 bg-base-100 overflow-hidden">
                         <div className="overflow-x-auto">
                           <table className="table table-xs w-full min-w-[600px]">
                             <thead>
                               <tr className="text-xs text-base-content/50">
+                                <th className="w-6"></th>
                                 <th className="w-8"></th>
-                                <th className="min-w-[120px]">Subtask</th>
+                                <th className="min-w-[120px]">Task</th>
                                 <th className="w-24 min-w-[96px]">Status</th>
                                 <th className="w-24 min-w-[96px]">Priority</th>
                                 <th className="w-28 min-w-[112px]">Due Date</th>
@@ -1267,7 +2116,7 @@ export default function TaskManager() {
                                       <ColumnHeader
                                         column={col}
                                         onSave={newName => updateCustomColumnName(list.id, col.id, newName)}
-                                        onDelete={() => showConfirm('Delete Column', `Are you sure you want to delete the "${col.name}" column? All data in this column will be lost.`, () => deleteCustomColumn(list.id, col.id))}
+                                        onDelete={() => showConfirm('Delete Column', `Are you sure you want to delete the "${col.name}" column? All data in this column will be lost.`, () => deleteCustomColumn(list.id, col.id), 'Delete')}
                                       />
                                     ) : (
                                       <span>{col.name}</span>
@@ -1285,17 +2134,32 @@ export default function TaskManager() {
                               </tr>
                             </thead>
                             <tbody>
-                              {(subTasks[list.id] || []).map(sub => (
-                                <tr key={sub.id} className="hover group">
+                              {(subTasks[list.id] || []).map(sub => {
+                                const subItems = sub.subItems || [];
+                                const isItemExpanded = expandedListItems.has(sub.id);
+                                const subOverdue = isTaskOverdue(sub);
+                                return (
+                                <React.Fragment key={sub.id}>
+                                <tr className={`hover group ${subOverdue ? 'bg-error/5' : ''}`}>
+                                  <td className="px-1">
+                                    <button onClick={() => toggleListItemExpand(sub.id)} className="btn btn-ghost btn-xs btn-circle">
+                                      {isItemExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                    </button>
+                                  </td>
                                   <td>
                                     <input type="checkbox" className="checkbox checkbox-xs checkbox-primary" checked={sub.status === 'done'} onChange={() => listStatusChangeable && updateSubTask(list.id, sub.id, { status: sub.status === 'done' ? 'todo' : 'done' })} disabled={!listStatusChangeable} />
                                   </td>
                                   <td>
-                                    {listEditable ? (
-                                      <EditableCell value={sub.title} onSave={val => updateSubTask(list.id, sub.id, { title: val })} placeholder="Subtask name..." className={`text-sm ${sub.status === 'done' ? 'line-through opacity-50' : ''}`} />
-                                    ) : (
-                                      <span className={`text-sm px-2 ${sub.status === 'done' ? 'line-through opacity-50' : ''}`}>{sub.title || 'Untitled Subtask'}</span>
-                                    )}
+                                    <div className="flex items-center gap-1">
+                                      {listEditable ? (
+                                        <EditableCell value={sub.title} onSave={val => updateSubTask(list.id, sub.id, { title: val })} placeholder="Task name..." className={`text-sm ${sub.status === 'done' ? 'line-through opacity-50' : ''}`} />
+                                      ) : (
+                                        <span className={`text-sm px-2 ${sub.status === 'done' ? 'line-through opacity-50' : ''}`}>{sub.title || 'Untitled Task'}</span>
+                                      )}
+                                      {subItems.length > 0 && (
+                                        <span className="badge badge-xs badge-secondary/20 text-secondary">{subItems.filter(i => i.status === 'done').length}/{subItems.length}</span>
+                                      )}
+                                    </div>
                                   </td>
                                   <td>
                                     {listStatusChangeable ? (
@@ -1316,11 +2180,14 @@ export default function TaskManager() {
                                     )}
                                   </td>
                                   <td>
-                                    {listEditable ? (
-                                      <DatePickerPopover value={sub.deadline} onSave={val => updateSubTask(list.id, sub.id, { deadline: val })} placeholder="Set date" className="text-xs" />
-                                    ) : (
-                                      <span className="text-xs px-2">{sub.deadline ? new Date(sub.deadline).toLocaleDateString() : '-'}</span>
-                                    )}
+                                    <div className="flex items-center gap-1">
+                                      {listEditable ? (
+                                        <DatePickerPopover value={sub.deadline} onSave={val => updateSubTask(list.id, sub.id, { deadline: val })} placeholder="Set date" className="text-xs" />
+                                      ) : (
+                                        <span className="text-xs px-2">{sub.deadline ? new Date(sub.deadline).toLocaleDateString() : '-'}</span>
+                                      )}
+                                      {subOverdue && <span className="badge badge-xs badge-error gap-1"><AlertCircle className="w-2.5 h-2.5" />Overdue</span>}
+                                    </div>
                                   </td>
                                   {(list.customColumns || []).map(col => (
                                     <td key={col.id}>
@@ -1334,20 +2201,70 @@ export default function TaskManager() {
                                   {listEditable && <td></td>}
                                   {listDeletable && (
                                     <td>
-                                      <button onClick={() => showConfirm('Delete Subtask', `Are you sure you want to delete "${sub.title}"?`, () => deleteSubTask(list.id, sub.id))} className="btn btn-ghost btn-xs text-error opacity-0 group-hover:opacity-100">
+                                      <button onClick={() => showConfirm('Delete Task', `Delete "${sub.title}"?`, () => deleteSubTask(list.id, sub.id), 'Delete')} className="btn btn-ghost btn-xs text-error opacity-0 group-hover:opacity-100">
                                         <Trash2 className="w-3 h-3" />
                                       </button>
                                     </td>
                                   )}
                                 </tr>
-                              ))}
+                                {/* Sub-items for this list task */}
+                                {isItemExpanded && (
+                                  <tr>
+                                    <td colSpan={99} className="p-0 bg-base-200/10">
+                                      <div className="ml-10 sm:ml-14 pl-4 pr-2 py-2 border-l-2 border-secondary/20">
+                                        {subItems.length > 0 && (
+                                          <table className="table table-xs w-full">
+                                            <tbody>
+                                              {subItems.map((item) => (
+                                                <tr key={item.id} className="hover group/si">
+                                                  <td className="w-8">
+                                                    <input type="checkbox" className="checkbox checkbox-xs checkbox-secondary" checked={item.status === 'done'} onChange={() => listStatusChangeable && updateListSubItem(list.id, sub.id, item.id, { status: item.status === 'done' ? 'todo' : 'done' })} disabled={!listStatusChangeable} />
+                                                  </td>
+                                                  <td>
+                                                    {listEditable ? (
+                                                      <EditableCell value={item.title} onSave={val => updateListSubItem(list.id, sub.id, item.id, { title: val })} placeholder="Subtask name..." className={`text-sm ${item.status === 'done' ? 'line-through opacity-50' : ''}`} />
+                                                    ) : (
+                                                      <span className={`text-sm px-2 ${item.status === 'done' ? 'line-through opacity-50' : ''}`}>{item.title || 'Untitled Subtask'}</span>
+                                                    )}
+                                                  </td>
+                                                  <td className="w-28">
+                                                    {listEditable ? (
+                                                      <DatePickerPopover value={item.deadline} onSave={val => updateListSubItem(list.id, sub.id, item.id, { deadline: val })} placeholder="Set date" className="text-xs" />
+                                                    ) : (
+                                                      <span className="text-xs px-2">{item.deadline ? new Date(item.deadline).toLocaleDateString() : '-'}</span>
+                                                    )}
+                                                  </td>
+                                                  <td className="w-8">
+                                                    {listDeletable && (
+                                                      <button onClick={() => showConfirm('Delete Subtask', `Delete "${item.title}"?`, () => deleteListSubItem(list.id, sub.id, item.id), 'Delete')} className="btn btn-ghost btn-xs text-error opacity-0 group-hover/si:opacity-100">
+                                                        <Trash2 className="w-3 h-3" />
+                                                      </button>
+                                                    )}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        )}
+                                        {canAddTasks && (
+                                          <button onClick={() => addListSubItem(list.id, sub.id)} className="btn btn-ghost btn-xs w-full mt-1 text-secondary border-dashed border border-base-300 hover:border-secondary">
+                                            <Plus className="w-3 h-3" /> Add Subtask
+                                          </button>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                                </React.Fragment>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
 
                         {canAddTasks && (
                           <button onClick={() => createSubTask(list.id)} className="btn btn-ghost btn-xs w-full mt-2 text-primary border-dashed border border-base-300 hover:border-primary">
-                            <Plus className="w-3 h-3" /> Add Subtask
+                            <Plus className="w-3 h-3" /> Add Task
                           </button>
                         )}
                       </div>
@@ -1356,18 +2273,36 @@ export default function TaskManager() {
                   );
                 })}
               </div>
+              )}
+
+              {canAddTasks && (
+                <button onClick={createListTask} className="btn btn-ghost btn-xs w-full mt-2 text-secondary border-dashed border border-base-300 hover:border-secondary">
+                  <Plus className="w-3 h-3" /> Add List Task
+                </button>
+              )}
+            </div>
+          );
+
+            return null;
+          })}
+
+          {/* Empty State — centered + button */}
+          {allSimple.length === 0 && allList.length === 0 && allRecurring.length === 0 && canAddTasks && (
+            <AddTaskPopupButton centered />
+          )}
+          {allSimple.length === 0 && allList.length === 0 && allRecurring.length === 0 && !canAddTasks && (
+            <div className="flex flex-col items-center justify-center py-16 text-base-content/50">
+              <LayoutList className="w-16 h-16 mb-4 opacity-20" />
+              <p className="text-lg font-medium mb-2">
+                {targetUserName ? `No tasks for ${targetUserName}` : 'No tasks yet'}
+              </p>
+              <p className="text-sm">No tasks have been created yet</p>
             </div>
           )}
 
-          {/* Empty State */}
-          {simpleTasks.length === 0 && listTasks.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-16 text-base-content/50">
-              <LayoutList className="w-16 h-16 mb-4 opacity-20" />
-              <p className="text-lg font-medium mb-2">No tasks yet</p>
-              <p className="text-sm">
-                {canAddTasks ? 'Click "+ Simple" or "+ List" to get started' : 'No tasks have been created yet'}
-              </p>
-            </div>
+          {/* Bottom + button when tasks exist */}
+          {(allSimple.length > 0 || allList.length > 0 || allRecurring.length > 0) && canAddTasks && (
+            <AddTaskPopupButton />
           )}
         </div>
       )}
@@ -1385,7 +2320,10 @@ export default function TaskManager() {
         onConfirm={confirmModal.onConfirm}
         title={confirmModal.title}
         message={confirmModal.message}
+        confirmLabel={confirmModal.confirmLabel}
+        confirmClass={confirmModal.confirmClass}
       />
+      <RequestTaskModal isOpen={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
     </div>
   );
 }

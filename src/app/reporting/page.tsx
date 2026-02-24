@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase/config';
 import { collection, query, where, getDocs, doc, getDoc, Timestamp } from 'firebase/firestore';
 import { WorkLog } from '@/types/workLog';
 import { TimeSlot, MemberProfile, DAYS_OF_WEEK } from '@/types/team';
+import { useUsers } from '@/hooks/useUsers';
+import UserAvatar from '@/components/common/UserAvatar';
 import { 
     format, 
     differenceInMinutes, 
@@ -55,27 +57,30 @@ interface EnhancedLog extends WorkLog {
     missedDate?: Date;
 }
 
-interface TeamMember {
-    uid: string;
-    displayName: string;
-    email: string;
-}
-
 export default function ReportingPage() {
     const { user, profile } = useAuth();
+    const { users: approvedUsers, loading: usersLoading } = useUsers();
     const [combinedLogs, setCombinedLogs] = useState<EnhancedLog[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState<'daily'|'weekly'|'monthly'>('weekly'); // Default to daily as per request implies focus on "Today"
+    const [filter, setFilter] = useState<'daily'|'weekly'|'monthly'>('weekly');
     const [currentDate, setCurrentDate] = useState(new Date());
     const dateInputRef = useRef<HTMLInputElement>(null);
 
     // Admin/Manager View State
     const [viewingUserId, setViewingUserId] = useState<string>('');
-    const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+    const [sidebarOpen, setSidebarOpen] = useState(true);
+
+    const isAdminOrManager = profile?.role === 'ADMIN' || profile?.role === 'MANAGER';
+    const viewingUser = viewingUserId && viewingUserId !== user?.uid
+        ? approvedUsers.find(u => u.uid === viewingUserId)
+        : null;
+    const teamMembers = approvedUsers.filter(u => u.uid !== user?.uid && u.status === 'approved');
 
     // Filter Optimization: Store raw data
     const [rawLogs, setRawLogs] = useState<WorkLog[]>([]);
     const [userSchedule, setUserSchedule] = useState<TimeSlot[]>([]);
+    const [switchingUser, setSwitchingUser] = useState(false);
+    const initialLoadDone = useRef(false);
 
     // Initialize viewing user ID
     useEffect(() => {
@@ -83,33 +88,6 @@ export default function ReportingPage() {
             setViewingUserId(user.uid);
         }
     }, [user, viewingUserId]);
-
-    // Fetch Team Members if Admin/Manager
-    useEffect(() => {
-        if (!profile) return;
-        
-        const fetchMembers = async () => {
-             if (['ADMIN', 'MANAGER'].includes(profile.role)) {
-                try {
-                    const usersRef = collection(db, 'users');
-                    const q = query(usersRef, where('role', 'in', ['TEAM_MEMBER', 'MANAGER', 'ADMIN'])); // Fetch all relevant users
-                    const snap = await getDocs(q);
-                    
-                    const members = snap.docs.map(doc => ({
-                        uid: doc.id,
-                        displayName: doc.data().displayName || 'Unknown User',
-                        email: doc.data().email || ''
-                    }));
-                    
-                    setTeamMembers(members);
-                } catch (err) {
-                    console.error("Error fetching team members:", err);
-                }
-             }
-        };
-        
-        fetchMembers();
-    }, [profile]);
 
     // Calculate Date Range based on filter and currentDate
     const getDateRange = () => {
@@ -155,7 +133,12 @@ export default function ReportingPage() {
         if (!user || !viewingUserId) return;
 
         const fetchData = async () => {
-            setLoading(true);
+            // Only show full-page spinner on initial load, not user switches
+            if (!initialLoadDone.current) {
+                setLoading(true);
+            } else {
+                setSwitchingUser(true);
+            }
             try {
                 // Fetch User Schedule (Member Profile)
                 let schedule: TimeSlot[] = [];
@@ -187,6 +170,8 @@ export default function ReportingPage() {
                 console.error("Error fetching data:", error);
             } finally {
                 setLoading(false);
+                setSwitchingUser(false);
+                initialLoadDone.current = true;
             }
         };
 
@@ -324,7 +309,15 @@ export default function ReportingPage() {
     }
 
     return (
-        <div className="p-6 max-w-5xl mx-auto">
+        <div className="flex h-[calc(100vh-4rem)] gap-4 p-4">
+        {/* Main Content */}
+        <div className={`flex-1 min-w-0 overflow-y-auto transition-opacity duration-200 ${switchingUser ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+        {switchingUser && (
+            <div className="sticky top-0 z-10 flex justify-center py-2">
+                <span className="loading loading-spinner loading-sm text-primary" />
+            </div>
+        )}
+        <div className="max-w-5xl mx-auto">
             <div className="flex flex-col gap-6 mb-8">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div className="flex-1">
@@ -334,7 +327,7 @@ export default function ReportingPage() {
                         <p className="text-base-content/60">
                             {viewingUserId === user?.uid 
                                 ? "Track your work sessions and daily progress." 
-                                : `Viewing activity logs for ${teamMembers.find(m => m.uid === viewingUserId)?.displayName || 'Team Member'}`
+                                : `Viewing activity logs for ${viewingUser?.displayName || 'Team Member'}`
                             }
                         </p>
                     </div>
@@ -345,25 +338,6 @@ export default function ReportingPage() {
                             <button className={`join-item btn btn-sm rounded-full border-none px-6 ${filter === 'weekly' ? 'bg-white shadow-sm text-primary hover:bg-white' : 'btn-ghost opacity-60 hover:opacity-100 hover:bg-base-200'}`} onClick={()=>setFilter('weekly')}>Weekly</button>
                             <button className={`join-item btn btn-sm rounded-full border-none px-6 ${filter === 'monthly' ? 'bg-white shadow-sm text-primary hover:bg-white' : 'btn-ghost opacity-60 hover:opacity-100 hover:bg-base-200'}`} onClick={()=>setFilter('monthly')}>Monthly</button>
                         </div>
-
-                         {/* Admin/Manager User Selector - Moved Below Filters */}
-                         {['ADMIN', 'MANAGER'].includes(profile?.role || '') && (
-                            <select 
-                                className="select select-xs select-bordered font-bold text-primary bg-primary/5 rounded-lg w-full max-w-[200px]"
-                                value={viewingUserId}
-                                onChange={(e) => setViewingUserId(e.target.value)}
-                            >
-                                <option value={user?.uid}>My Logs</option>
-                                <option disabled>──────────</option>
-                                {teamMembers
-                                    .filter(m => m.uid !== user?.uid)
-                                    .map(member => (
-                                    <option key={member.uid} value={member.uid}>
-                                        {member.displayName}
-                                    </option>
-                                ))}
-                            </select>
-                         )}
                     </div>
                 </div>
 
@@ -556,6 +530,100 @@ export default function ReportingPage() {
                     })
                 )}
             </div>
+        </div>
+        </div>
+
+        {/* Team Sidebar - Admin/Manager only */}
+        {isAdminOrManager && (
+            <>
+            {/* Collapsed toggle */}
+            {!sidebarOpen && (
+                <button 
+                    onClick={() => setSidebarOpen(true)}
+                    className="shrink-0 flex flex-col items-center gap-2 bg-base-100 border border-base-200 rounded-xl p-2 shadow-sm hover:shadow-md transition-shadow self-start"
+                    title="Show team"
+                >
+                    <Users className="w-5 h-5 text-primary" />
+                    <ChevronRight className="w-4 h-4 text-base-content/40 rotate-180" />
+                </button>
+            )}
+
+            {/* Expanded sidebar */}
+            {sidebarOpen && (
+                <aside className="w-56 shrink-0 bg-base-100 border border-base-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
+                    {/* Sidebar Header */}
+                    <div className="p-3 border-b border-base-200 flex items-center justify-between">
+                        <h3 className="font-semibold text-sm flex items-center gap-2">
+                            <Users className="w-4 h-4 text-primary" />
+                            Team
+                        </h3>
+                        <button 
+                            onClick={() => setSidebarOpen(false)}
+                            className="btn btn-ghost btn-xs btn-circle"
+                            title="Collapse"
+                        >
+                            <ChevronRight className="w-4 h-4" />
+                        </button>
+                    </div>
+
+                    {/* My Logs Button */}
+                    <div className="p-2 border-b border-base-200">
+                        <button
+                            onClick={() => setViewingUserId(user?.uid || '')}
+                            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+                                !viewingUser
+                                    ? 'bg-primary/10 text-primary font-medium' 
+                                    : 'hover:bg-base-200 text-base-content'
+                            }`}
+                        >
+                            <UserAvatar 
+                                photoURL={profile?.photoURL} 
+                                displayName={profile?.displayName}
+                                size="xs"
+                                showRing={false}
+                            />
+                            <span className="truncate">My Logs</span>
+                        </button>
+                    </div>
+
+                    {/* Team Members List */}
+                    <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                        {usersLoading ? (
+                            <div className="flex justify-center py-4">
+                                <span className="loading loading-spinner loading-sm text-primary"></span>
+                            </div>
+                        ) : teamMembers.length === 0 ? (
+                            <p className="text-xs text-base-content/40 text-center py-4">No team members</p>
+                        ) : (
+                            teamMembers.map(member => (
+                                <button
+                                    key={member.uid}
+                                    onClick={() => setViewingUserId(member.uid)}
+                                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+                                        viewingUserId === member.uid 
+                                            ? 'bg-primary/10 text-primary font-medium' 
+                                            : 'hover:bg-base-200 text-base-content'
+                                    }`}
+                                    title={member.displayName || member.email || ''}
+                                >
+                                    <UserAvatar 
+                                        photoURL={member.photoURL} 
+                                        displayName={member.displayName}
+                                        size="xs"
+                                        showRing={false}
+                                    />
+                                    <div className="flex-1 min-w-0 text-left">
+                                        <p className="truncate text-sm">{member.displayName || 'Unknown'}</p>
+                                        <p className="truncate text-[10px] text-base-content/40">{member.role}</p>
+                                    </div>
+                                </button>
+                            ))
+                        )}
+                    </div>
+                </aside>
+            )}
+            </>
+        )}
         </div>
     );
 }

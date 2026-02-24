@@ -7,9 +7,7 @@ import {
   CheckSquare,
   Users,
   BarChart,
-  MessageSquare,
   FolderOpen,
-  Calendar,
   Wrench,
   LogOut,
   UserCircle,
@@ -29,9 +27,7 @@ const menuItems = [
   { name: 'Task Manager', icon: CheckSquare, href: '/tasks' },
   { name: 'Team Availability', icon: Users, href: '/team-availability' },
   { name: 'Reporting', icon: BarChart, href: '/reporting' },
-  { name: 'Communication', icon: MessageSquare, href: '/communication' },
   { name: 'Resources', icon: FolderOpen, href: '/resources' },
-  { name: 'Meetings', icon: Calendar, href: '/meetings' },
   { name: 'Web Tracker', icon: Eye, href: '/web-tracker' },
   { name: 'Request a Fix', icon: Wrench, href: '/request-fix' },
 ];
@@ -65,9 +61,9 @@ export default function Sidebar() {
   // Add Settings to menu only for ADMIN
   const allMenuItems = profile?.role === 'ADMIN' 
     ? [
-        ...menuItems.slice(0, 8), 
+        ...menuItems.slice(0, 6), 
         { name: 'Settings', icon: Settings, href: '/settings' },
-        ...menuItems.slice(8)
+        ...menuItems.slice(6)
       ]
     : menuItems;
 

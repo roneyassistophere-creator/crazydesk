@@ -12,7 +12,10 @@ import {
   Image as ImageIcon, Clock, User, Eye, EyeOff,
   AlertTriangle, MousePointerClick, Monitor, Shield, Flag,
   Calendar, CalendarDays, CalendarRange, Trash2, Download, Camera,
+  Users, ChevronRight,
 } from 'lucide-react';
+import { useUsers } from '@/hooks/useUsers';
+import UserAvatar from '@/components/common/UserAvatar';
 import { useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 
@@ -130,6 +133,11 @@ export default function WebTrackerPage() {
   const [dateFilter, setDateFilter] = useState<DateFilter>('today');
   const [deleting, setDeleting] = useState(false);
   const [sendingCapture, setSendingCapture] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Team sidebar data
+  const { users: approvedUsers, loading: usersLoading } = useUsers();
+  const teamMembers = approvedUsers.filter(u => u.uid !== user?.uid);
 
   // Activity
   const [activityStats, setActivityStats] = useState<ActivityStats>({
@@ -201,34 +209,33 @@ export default function WebTrackerPage() {
   }, [user]);
 
   // ── Fetch tracker logs ──────────────────────────────────────
+  // For admins/managers: always fetch ALL logs (single subscription)
+  // and filter by selectedUser client-side for instant switching
   useEffect(() => {
     if (!user) return;
-    let q;
-    if (isManagerOrAdmin) {
-      q = selectedUser !== 'ALL'
-        ? query(collection(db, 'tracker_logs'), where('userId', '==', selectedUser), orderBy('timestamp', 'desc'))
-        : query(collection(db, 'tracker_logs'), orderBy('timestamp', 'desc'));
-    } else {
-      q = query(collection(db, 'tracker_logs'), where('userId', '==', user.uid), orderBy('timestamp', 'desc'));
-    }
+    const q = isManagerOrAdmin
+      ? query(collection(db, 'tracker_logs'), orderBy('timestamp', 'desc'))
+      : query(collection(db, 'tracker_logs'), where('userId', '==', user.uid), orderBy('timestamp', 'desc'));
     return onSnapshot(q, snap => {
       setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() } as TrackerLog)));
       setLoading(false);
     }, err => { setError(err.message); setLoading(false); });
-  }, [user, isManagerOrAdmin, selectedUser]);
+  }, [user, isManagerOrAdmin]);
 
-  // ── Filter logs by date ─────────────────────────────────────
+  // ── Filter logs by date AND selected user ───────────────────
   const filteredLogs = useMemo(() => {
     const start = dateRangeStart(dateFilter);
     const end = dateRangeEnd(dateFilter);
     return logs.filter(l => {
+      // User filter (admin/manager only)
+      if (isManagerOrAdmin && selectedUser !== 'ALL' && l.userId !== selectedUser) return false;
       const d = l.timestamp?.toDate?.();
       if (!d) return false;
       if (start && d < start) return false;
       if (end && d >= end) return false;
       return true;
     });
-  }, [logs, dateFilter]);
+  }, [logs, dateFilter, selectedUser, isManagerOrAdmin]);
 
   // ── Auto-delete 30-day-old logs (admin, runs once) ─────────
   useEffect(() => {
@@ -384,7 +391,8 @@ export default function WebTrackerPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-[calc(100vh-4rem)] gap-4 p-4">
+    <div className="flex-1 min-w-0 overflow-y-auto space-y-6">
 
       {/* ─── Error ─── */}
       {error && (
@@ -405,17 +413,6 @@ export default function WebTrackerPage() {
           <p className="text-base-content/60">Activity monitoring &amp; capture logs.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {isManagerOrAdmin && (
-            <select className="select select-bordered select-sm" value={selectedUser} onChange={e => setSelectedUser(e.target.value)}>
-              <option value="ALL">All Users</option>
-              {userList.map(u => (
-                <option key={u.uid} value={u.uid}>
-                  {u.name} {u.isCheckedIn ? (u.source === 'desktop' ? '🖥️' : '🌐') : '⚪'}
-                </option>
-              ))}
-            </select>
-          )}
-
           {/* Clear all */}
           {isManagerOrAdmin && filteredLogs.length > 0 && (
             <button onClick={handleClearAllLogs} disabled={deleting} className="btn btn-sm btn-error btn-outline">
@@ -646,6 +643,122 @@ export default function WebTrackerPage() {
           </div>
         </div>
       )}
+    </div>
+
+    {/* ─── Team Sidebar — Admin/Manager only ─── */}
+    {isManagerOrAdmin && (
+      <>
+        {/* Collapsed toggle */}
+        {!sidebarOpen && (
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="shrink-0 flex flex-col items-center gap-2 bg-base-100 border border-base-200 rounded-xl p-2 shadow-sm hover:shadow-md transition-shadow self-start"
+            title="Show team"
+          >
+            <Users className="w-5 h-5 text-primary" />
+            <ChevronRight className="w-4 h-4 text-base-content/40 rotate-180" />
+          </button>
+        )}
+
+        {/* Expanded sidebar */}
+        {sidebarOpen && (
+          <aside className="w-56 shrink-0 bg-base-100 border border-base-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
+            {/* Sidebar Header */}
+            <div className="p-3 border-b border-base-200 flex items-center justify-between">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <Users className="w-4 h-4 text-primary" />
+                Team
+              </h3>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="btn btn-ghost btn-xs btn-circle"
+                title="Collapse"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* All Users Button */}
+            <div className="p-2 border-b border-base-200 space-y-1">
+              <button
+                onClick={() => setSelectedUser('ALL')}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+                  selectedUser === 'ALL'
+                    ? 'bg-primary/10 text-primary font-medium'
+                    : 'hover:bg-base-200 text-base-content'
+                }`}
+              >
+                <Users className="w-5 h-5" />
+                <span className="truncate">All Users</span>
+              </button>
+              <button
+                onClick={() => setSelectedUser(user?.uid || '')}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+                  selectedUser === user?.uid
+                    ? 'bg-primary/10 text-primary font-medium'
+                    : 'hover:bg-base-200 text-base-content'
+                }`}
+              >
+                <UserAvatar
+                  photoURL={profile?.photoURL}
+                  displayName={profile?.displayName}
+                  size="xs"
+                  showRing={false}
+                />
+                <span className="truncate">My Logs</span>
+              </button>
+            </div>
+
+            {/* Team Members List */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {usersLoading ? (
+                <div className="flex justify-center py-4">
+                  <span className="loading loading-spinner loading-sm text-primary"></span>
+                </div>
+              ) : teamMembers.length === 0 ? (
+                <p className="text-xs text-base-content/40 text-center py-4">No team members</p>
+              ) : (
+                teamMembers.map(member => {
+                  const checkedIn = userList.find(u => u.uid === member.uid);
+                  return (
+                    <button
+                      key={member.uid}
+                      onClick={() => setSelectedUser(member.uid)}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+                        selectedUser === member.uid
+                          ? 'bg-primary/10 text-primary font-medium'
+                          : 'hover:bg-base-200 text-base-content'
+                      }`}
+                      title={member.displayName || member.email || ''}
+                    >
+                      <div className="relative">
+                        <UserAvatar
+                          photoURL={member.photoURL}
+                          displayName={member.displayName}
+                          size="xs"
+                          showRing={false}
+                        />
+                        {checkedIn?.isCheckedIn && (
+                          <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-base-100 bg-success" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="truncate text-sm">{member.displayName || 'Unknown'}</p>
+                        <p className="truncate text-[10px] text-base-content/40">
+                          {checkedIn?.isCheckedIn
+                            ? (checkedIn.source === 'desktop' ? '🖥️ Desktop' : '🌐 Browser')
+                            : '⚪ Offline'}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+        )}
+      </>
+    )}
     </div>
   );
 }

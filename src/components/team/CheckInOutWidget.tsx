@@ -32,11 +32,13 @@ const WindowsIcon = ({ className }: { className?: string }) => (
 interface CheckInOutWidgetProps {
   onStatusChange?: (isOnline: boolean) => void;
   compact?: boolean;
+  inline?: boolean;
 }
 
 export default function CheckInOutWidget({
   onStatusChange,
   compact = false,
+  inline = false,
 }: CheckInOutWidgetProps) {
   const { user, profile } = useAuth();
 
@@ -1151,56 +1153,117 @@ export default function CheckInOutWidget({
     </>
   );
 
+  // Inline mode (just buttons, no card — for page headers)
+  if (inline) {
+    return (
+      <>
+        <div className="flex items-center gap-2 flex-wrap">
+          {isCheckedIn ? (
+            <>
+              <span className={`badge gap-1 font-mono text-xs ${isOnBreak ? 'badge-warning' : isStaleDesktop ? 'badge-error' : 'badge-success'}`}>
+                <Clock className="w-3.5 h-3.5" /> {fmt(workSeconds)}
+              </span>
+              {sessionSource === 'desktop' && !isStaleDesktop && (
+                <span className="badge badge-sm badge-info">Desktop</span>
+              )}
+              {isOnBreak && <span className="badge badge-sm badge-warning">Break</span>}
+              {isStaleDesktop && (
+                <span className="badge badge-sm badge-error gap-1">
+                  <AlertTriangle className="w-3 h-3" /> Stale
+                </span>
+              )}
+              {!isOnBreak ? (
+                <>
+                  <button className="btn btn-sm btn-warning gap-1.5" onClick={handleStartBreak} disabled={loading}>
+                    <Coffee className="w-3.5 h-3.5" /> Break
+                  </button>
+                  <button className="btn btn-sm btn-error gap-1.5" onClick={handleCheckOut} disabled={loading}>
+                    <XCircle className="w-3.5 h-3.5" /> Check Out
+                  </button>
+                </>
+              ) : (
+                <button className="btn btn-sm btn-success gap-1.5" onClick={handleEndBreak} disabled={loading}>
+                  <Play className="w-3.5 h-3.5" /> Resume
+                </button>
+              )}
+            </>
+          ) : (waitingForDesktop || waitingForPythonTracker) ? (
+            <span className="badge badge-ghost gap-1">
+              <span className="loading loading-spinner loading-xs" /> Connecting...
+            </span>
+          ) : (
+            <button className="btn btn-sm btn-success gap-1.5" onClick={handleCheckIn} disabled={loading}>
+              {loading ? <span className="loading loading-spinner loading-xs" /> : <CheckCircle className="w-3.5 h-3.5" />}
+              Check In
+            </button>
+          )}
+        </div>
+        {renderModals()}
+      </>
+    );
+  }
+
   // Compact mode (sidebar)
   if (compact) {
     return (
       <>
-        <div className="flex items-center gap-2">
-          {isCheckedIn ? (
-            <>
-              <span className={`badge badge-sm gap-1 ${isOnBreak ? 'badge-warning' : isStaleDesktop ? 'badge-error' : 'badge-success'}`}>
-                <Clock className="w-3 h-3" /> {fmt(workSeconds)}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            {isCheckedIn ? (
+              <>
+                <span className={`badge badge-sm gap-1 ${isOnBreak ? 'badge-warning' : isStaleDesktop ? 'badge-error' : 'badge-success'}`}>
+                  <Clock className="w-3 h-3" /> {fmt(workSeconds)}
+                </span>
+                {sessionSource === 'desktop' && !isStaleDesktop && (
+                  <span className="badge badge-info badge-xs">Desktop</span>
+                )}
+                {isStaleDesktop && (
+                  <div className="dropdown dropdown-end">
+                    <button
+                      tabIndex={0}
+                      className="badge badge-error badge-xs gap-1 cursor-pointer hover:brightness-110"
+                      disabled={loading}
+                      title="Desktop app offline — click for options"
+                    >
+                      <AlertTriangle className="w-2.5 h-2.5" /> Stale
+                    </button>
+                    <ul tabIndex={0} className="dropdown-content z-50 menu menu-xs p-1 shadow bg-base-200 rounded-box w-32">
+                      <li>
+                        <button onClick={handleReconnectDesktop} disabled={loading} className="text-info text-xs">
+                          <RefreshCw className="w-3 h-3" /> Reconnect
+                        </button>
+                      </li>
+                      <li>
+                        <button onClick={handleForceCloseDesktop} disabled={loading} className="text-error text-xs">
+                          <XCircle className="w-3 h-3" /> Force Close
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                )}
+                {isOnBreak && <span className="badge badge-warning badge-xs">Break</span>}
+              </>
+            ) : (waitingForDesktop || waitingForPythonTracker) ? (
+              <span className="badge badge-sm badge-ghost gap-1">
+                <span className="loading loading-spinner loading-xs" /> Connecting...
               </span>
-              {sessionSource === 'desktop' && !isStaleDesktop && (
-                <span className="badge badge-info badge-xs">Desktop</span>
-              )}
-              {isStaleDesktop && (
-                <div className="dropdown dropdown-end">
-                  <button
-                    tabIndex={0}
-                    className="badge badge-error badge-xs gap-1 cursor-pointer hover:brightness-110"
-                    disabled={loading}
-                    title="Desktop app offline — click for options"
-                  >
-                    <AlertTriangle className="w-2.5 h-2.5" /> Stale
-                  </button>
-                  <ul tabIndex={0} className="dropdown-content z-50 menu menu-xs p-1 shadow bg-base-200 rounded-box w-32">
-                    <li>
-                      <button onClick={handleReconnectDesktop} disabled={loading} className="text-info text-xs">
-                        <RefreshCw className="w-3 h-3" /> Reconnect
-                      </button>
-                    </li>
-                    <li>
-                      <button onClick={handleForceCloseDesktop} disabled={loading} className="text-error text-xs">
-                        <XCircle className="w-3 h-3" /> Force Close
-                      </button>
-                    </li>
-                  </ul>
-                </div>
-              )}
-              {isOnBreak && <span className="badge badge-warning badge-xs">Break</span>}
-            </>
-          ) : (waitingForDesktop || waitingForPythonTracker) ? (
-            <span className="badge badge-sm badge-ghost gap-1">
-              <span className="loading loading-spinner loading-xs" /> Connecting...
-            </span>
-          ) : (
+            ) : (
+              <button
+                className="btn btn-xs btn-success"
+                onClick={handleCheckIn}
+                disabled={loading}
+              >
+                Check In
+              </button>
+            )}
+          </div>
+          {isCheckedIn && (
             <button
-              className="btn btn-xs btn-success"
-              onClick={handleCheckIn}
+              className="btn btn-xs btn-error btn-outline w-full gap-1"
+              onClick={handleCheckOut}
               disabled={loading}
             >
-              Check In
+              <XCircle className="w-3 h-3" /> Check Out
             </button>
           )}
         </div>
@@ -1212,7 +1275,7 @@ export default function CheckInOutWidget({
   // Full widget
   return (
     <>
-      <div className="card bg-base-200 shadow-lg">
+      <div className="card bg-base-200 shadow-lg w-full h-full">
         <div className="card-body p-4">
           {/* Header */}
           <div className="flex items-center justify-between">
