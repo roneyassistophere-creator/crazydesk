@@ -35,7 +35,7 @@
   --size-selector: 0.25rem;
   --size-field: 0.25rem;
   --border: 1px;
-  --depth: 1;
+  --depth: 0;
   --noise: 1;
 }
 
@@ -70,7 +70,7 @@
   --size-selector: 0.25rem;
   --size-field: 0.25rem;
   --border: 1px;
-  --depth: 1;
+  --depth: 0;
   --noise: 0;
 }
 
@@ -104,4 +104,11 @@ body {
   background-color: var(--color-base-100);
   color: var(--color-base-content);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Remove drop shadows from all buttons globally */
+.btn {
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
 }

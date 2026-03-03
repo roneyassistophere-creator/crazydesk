@@ -316,8 +316,10 @@ ipcMain.handle('capture-screen', async () => {
     if (isMac) {
       const status = systemPreferences.getMediaAccessStatus('screen');
       console.log(`[Capture] macOS screen recording permission status: ${status}`);
-      if (status !== 'granted') {
-        console.warn('[Capture] Screen recording not granted. Opening System Preferences...');
+      // Note: for unsigned apps, macOS may report 'not-determined' or even 'granted'
+      // even when not actually permitted. We proceed and let the thumbnail check catch failures.
+      if (status === 'denied' || status === 'restricted') {
+        console.warn('[Capture] Screen recording explicitly denied. Opening System Preferences...');
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
         return { permissionNeeded: true };
       }
@@ -333,7 +335,7 @@ ipcMain.handle('capture-screen', async () => {
       if (!sources.length) {
         console.warn(`[Capture] Attempt ${attempt}: No screen sources found`);
         if (attempt < 3) { await new Promise(r => setTimeout(r, 500)); continue; }
-        return null;
+        return { fallback: true }; // Signal renderer to use getDisplayMedia
       }
 
       // Try all sources — sometimes the primary screen isn't the first one
@@ -354,18 +356,11 @@ ipcMain.handle('capture-screen', async () => {
       if (attempt < 3) { await new Promise(r => setTimeout(r, 800)); }
     }
 
-    console.warn('[Capture] All 3 attempts failed — thumbnail empty');
-    if (isMac) {
-      const status = systemPreferences.getMediaAccessStatus('screen');
-      if (status !== 'granted') {
-        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
-        return { permissionNeeded: true };
-      }
-    }
-    return null;
+    console.warn('[Capture] All 3 desktopCapturer attempts failed — signalling fallback');
+    return { fallback: true }; // Signal renderer to use getDisplayMedia
   } catch (e) {
     console.error('[Capture] Screen capture error:', e);
-    return null;
+    return { fallback: true };
   }
 });
 

@@ -38,6 +38,8 @@ let _countdownInterval = null;
 function isCaptureInProgress() { return _captureInProgress; }
 
 // ─── Screen capture (via main process IPC) ────────────────────
+// Primary: desktopCapturer in main process (silent, no prompt)
+// Fallback: getDisplayMedia in renderer (may show one-time picker on first use)
 async function captureScreen() {
   try {
     console.log('[Capture] Requesting screen capture from main process...');
@@ -49,16 +51,98 @@ async function captureScreen() {
       return null;
     }
 
-    if (!result) {
-      console.warn('[Capture] Screen capture returned null');
-      return null;
+    // If main process signalled fallback, use getDisplayMedia in renderer
+    if (result && typeof result === 'object' && result.fallback) {
+      console.log('[Capture] desktopCapturer failed — falling back to getDisplayMedia');
+      return await captureScreenViaDisplayMedia();
     }
+
+    if (!result) {
+      console.warn('[Capture] Screen capture returned null — trying getDisplayMedia fallback');
+      return await captureScreenViaDisplayMedia();
+    }
+
     console.log(`[Capture] Screen buffer received: ${result.length || result.byteLength || 'unknown'} bytes`);
     return new Blob([result], { type: 'image/jpeg' });
   } catch (e) {
-    console.warn('Screen capture error:', e);
+    console.warn('Screen capture error:', e, '— trying getDisplayMedia fallback');
+    return await captureScreenViaDisplayMedia();
+  }
+}
+
+// ─── Fallback screen capture using getDisplayMedia ────────────
+// This works reliably on all Macs because it triggers the proper
+// macOS screen recording permission prompt on first use.
+// After the user grants permission once, subsequent captures are silent.
+let _displayMediaStream = null; // Reuse stream to avoid repeated picker prompts
+
+async function captureScreenViaDisplayMedia() {
+  try {
+    // Reuse existing stream if still active
+    if (_displayMediaStream) {
+      const tracks = _displayMediaStream.getVideoTracks();
+      if (tracks.length > 0 && tracks[0].readyState === 'live') {
+        console.log('[Capture:Fallback] Reusing existing display media stream');
+        return await grabFrameFromStream(_displayMediaStream);
+      }
+      // Stream ended, clean up
+      _displayMediaStream.getTracks().forEach(t => t.stop());
+      _displayMediaStream = null;
+    }
+
+    console.log('[Capture:Fallback] Requesting getDisplayMedia...');
+    _displayMediaStream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        displaySurface: 'monitor',
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 1 },
+      },
+      audio: false,
+      preferCurrentTab: false,
+      selfBrowserSurface: 'exclude',
+      systemAudio: 'exclude',
+    });
+
+    const blob = await grabFrameFromStream(_displayMediaStream);
+
+    // Keep the stream alive for future captures (no repeated picker)
+    // The stream will auto-end when the user stops sharing or the app closes.
+    // Listen for track ending so we know to request a new stream next time.
+    const track = _displayMediaStream.getVideoTracks()[0];
+    if (track) {
+      track.addEventListener('ended', () => {
+        console.log('[Capture:Fallback] Display media track ended');
+        _displayMediaStream = null;
+      });
+    }
+
+    return blob;
+  } catch (e) {
+    console.warn('[Capture:Fallback] getDisplayMedia failed:', e.message || e);
+    _displayMediaStream = null;
     return null;
   }
+}
+
+async function grabFrameFromStream(stream) {
+  const video = document.createElement('video');
+  video.srcObject = stream;
+  video.setAttribute('playsinline', 'true');
+  video.muted = true;
+  await video.play();
+  // Wait a moment for the frame to render
+  await new Promise(r => setTimeout(r, 200));
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 1920;
+  canvas.height = video.videoHeight || 1080;
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  video.pause();
+  video.srcObject = null;
+  video.remove();
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.8));
+  console.log(`[Capture:Fallback] Screenshot captured: ${blob?.size || 0} bytes`);
+  return blob;
 }
 
 // ─── Camera capture ───────────────────────────────────────────
@@ -391,6 +475,12 @@ export function stopAllTracking() {
     clearInterval(_countdownInterval);
     _countdownInterval = null;
     window.dispatchEvent(new CustomEvent('capture-countdown-done'));
+  }
+  // Release the reusable display media stream
+  if (_displayMediaStream) {
+    _displayMediaStream.getTracks().forEach(t => t.stop());
+    _displayMediaStream = null;
+    console.log('[Capture] Cleaned up display media stream');
   }
 }
 
