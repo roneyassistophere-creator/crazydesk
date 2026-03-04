@@ -39,7 +39,7 @@ function isCaptureInProgress() { return _captureInProgress; }
 
 // ─── Screen capture (via main process IPC) ────────────────────
 // Primary: desktopCapturer in main process (silent, no prompt)
-// Fallback: getDisplayMedia in renderer (may show one-time picker on first use)
+// Fallback: getDisplayMedia in renderer (auto-selected via setDisplayMediaRequestHandler)
 async function captureScreen() {
   try {
     console.log('[Capture] Requesting screen capture from main process...');
@@ -51,22 +51,44 @@ async function captureScreen() {
       return null;
     }
 
-    // If main process signalled fallback, use getDisplayMedia in renderer
+    // If main process signalled fallback (all-black or empty), use getDisplayMedia
     if (result && typeof result === 'object' && result.fallback) {
-      console.log('[Capture] desktopCapturer failed — falling back to getDisplayMedia');
-      return await captureScreenViaDisplayMedia();
+      console.log('[Capture] desktopCapturer returned black/empty — falling back to getDisplayMedia');
+      const fallbackBlob = await captureScreenViaDisplayMedia();
+      if (!fallbackBlob) {
+        console.error('[Capture] Both desktopCapturer and getDisplayMedia failed');
+        window.electronAPI?.notify(
+          'CrazyDesk — Screen Capture Failed',
+          'Screen recording permission may not be granted. Go to System Settings → Privacy & Security → Screen Recording and enable CrazyDesk Tracker, then restart the app.'
+        );
+      }
+      return fallbackBlob;
     }
 
     if (!result) {
       console.warn('[Capture] Screen capture returned null — trying getDisplayMedia fallback');
-      return await captureScreenViaDisplayMedia();
+      const fallbackBlob = await captureScreenViaDisplayMedia();
+      if (!fallbackBlob) {
+        window.electronAPI?.notify(
+          'CrazyDesk — Screen Capture Failed',
+          'Screen recording permission may not be granted. Go to System Settings → Privacy & Security → Screen Recording and enable CrazyDesk Tracker, then restart the app.'
+        );
+      }
+      return fallbackBlob;
     }
 
     console.log(`[Capture] Screen buffer received: ${result.length || result.byteLength || 'unknown'} bytes`);
     return new Blob([result], { type: 'image/jpeg' });
   } catch (e) {
     console.warn('Screen capture error:', e, '— trying getDisplayMedia fallback');
-    return await captureScreenViaDisplayMedia();
+    const fallbackBlob = await captureScreenViaDisplayMedia();
+    if (!fallbackBlob) {
+      window.electronAPI?.notify(
+        'CrazyDesk — Screen Capture Failed',
+        'Screen recording permission may not be granted. Go to System Settings → Privacy & Security → Screen Recording and enable CrazyDesk Tracker.'
+      );
+    }
+    return fallbackBlob;
   }
 }
 
@@ -132,14 +154,30 @@ async function grabFrameFromStream(stream) {
   video.muted = true;
   await video.play();
   // Wait a moment for the frame to render
-  await new Promise(r => setTimeout(r, 200));
+  await new Promise(r => setTimeout(r, 300));
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth || 1920;
   canvas.height = video.videoHeight || 1080;
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   video.pause();
   video.srcObject = null;
   video.remove();
+
+  // Check if frame is all-black (permission silently denied)
+  const sampleData = ctx.getImageData(0, 0, canvas.width, Math.min(canvas.height, 10)).data;
+  let hasContent = false;
+  for (let i = 0; i < sampleData.length; i += 40) { // sample every 10th pixel
+    if (sampleData[i] > 5 || sampleData[i + 1] > 5 || sampleData[i + 2] > 5) {
+      hasContent = true;
+      break;
+    }
+  }
+  if (!hasContent) {
+    console.warn('[Capture:Fallback] Frame is all-black — screen recording permission likely denied');
+    return null;
+  }
+
   const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.8));
   console.log(`[Capture:Fallback] Screenshot captured: ${blob?.size || 0} bytes`);
   return blob;

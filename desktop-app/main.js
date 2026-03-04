@@ -145,6 +145,27 @@ function createWindow() {
     return allowedPermissions.includes(permission);
   });
 
+  // ─── Handle getDisplayMedia() in renderer — auto-select primary screen ──
+  // Without this handler, getDisplayMedia() shows a picker dialog or fails
+  // because Chromium requires a user gesture. This bypasses both issues by
+  // programmatically selecting the primary screen source via desktopCapturer.
+  mainWindow.webContents.session.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      console.log(`[DisplayMedia] Auto-selecting screen source (${sources.length} available)`);
+      if (sources.length > 0) {
+        // Select the primary screen (usually "Entire Screen" or first source)
+        callback({ video: sources[0], audio: 'loopback' });
+      } else {
+        console.warn('[DisplayMedia] No screen sources available');
+        callback({});
+      }
+    } catch (e) {
+      console.error('[DisplayMedia] Handler error:', e);
+      callback({});
+    }
+  });
+
   // Load via custom 'app://' protocol for correct MIME types (fixes ES modules on Windows)
   mainWindow.loadURL('app://crazydesk/renderer/index.html');
 
@@ -316,8 +337,9 @@ ipcMain.handle('capture-screen', async () => {
     if (isMac) {
       const status = systemPreferences.getMediaAccessStatus('screen');
       console.log(`[Capture] macOS screen recording permission status: ${status}`);
-      // Note: for unsigned apps, macOS may report 'not-determined' or even 'granted'
-      // even when not actually permitted. We proceed and let the thumbnail check catch failures.
+      // Note: for unsigned/ad-hoc signed apps, macOS may report 'not-determined' or
+      // even 'granted' even when not actually permitted. We proceed and let the
+      // pixel check catch black/empty screenshots from silent permission failures.
       if (status === 'denied' || status === 'restricted') {
         console.warn('[Capture] Screen recording explicitly denied. Opening System Preferences...');
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
@@ -344,6 +366,26 @@ ipcMain.handle('capture-screen', async () => {
         const size = thumb.getSize();
         console.log(`[Capture] Source "${source.name}" thumbnail: ${size.width}x${size.height}`);
         if (size.width > 0 && size.height > 0) {
+          // Check if image has actual content (not all-black)
+          // When macOS silently denies screen recording, desktopCapturer returns
+          // valid-sized thumbnails that are completely black (all zero pixels).
+          const bitmap = thumb.toBitmap();
+          let hasContent = false;
+          // Sample every 5000th pixel for speed — bitmap is RGBA (4 bytes per pixel)
+          const step = 5000 * 4;
+          for (let i = 0; i < bitmap.length; i += step) {
+            // Check R, G, B channels (skip A at i+3)
+            if (bitmap[i] > 5 || bitmap[i + 1] > 5 || bitmap[i + 2] > 5) {
+              hasContent = true;
+              break;
+            }
+          }
+
+          if (!hasContent) {
+            console.warn(`[Capture] Source "${source.name}" is all-black (permission may be silently denied)`);
+            continue; // Try next source
+          }
+
           const jpeg = thumb.toJPEG(80);
           if (jpeg.length > 500) { // Valid JPEG should be > 500 bytes
             console.log(`[Capture] Screenshot JPEG from "${source.name}": ${jpeg.length} bytes`);
@@ -352,7 +394,7 @@ ipcMain.handle('capture-screen', async () => {
         }
       }
 
-      console.warn(`[Capture] Attempt ${attempt}: All thumbnails empty`);
+      console.warn(`[Capture] Attempt ${attempt}: All thumbnails empty or black`);
       if (attempt < 3) { await new Promise(r => setTimeout(r, 800)); }
     }
 
