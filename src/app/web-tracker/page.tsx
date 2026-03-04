@@ -567,7 +567,7 @@ export default function WebTrackerPage() {
             <div className="card-body p-4">
               <div className="flex items-center gap-2 mb-1">
                 <User size={14} className="text-base-content/60" />
-                <span className="text-sm font-semibold">{log.userDisplayName}</span>
+                <span className="text-sm font-semibold">{(log.userDisplayName || '').split(' ')[0]}</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="text-xs text-base-content/50">{log.timestamp?.toDate?.().toLocaleDateString() || ''}</div>
@@ -613,7 +613,7 @@ export default function WebTrackerPage() {
             {/* Image info bar */}
             <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white p-4 rounded-b-lg flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <span className="text-sm font-semibold">{lightboxLog.userDisplayName}</span>
+                <span className="text-sm font-semibold">{(lightboxLog.userDisplayName || '').split(' ')[0]}</span>
                 <span className="text-sm opacity-70">
                   {lightboxLog.timestamp?.toDate?.()?.toLocaleDateString()} at {lightboxLog.timestamp?.toDate?.() ? formatTime12h(lightboxLog.timestamp.toDate()) : ''}
                 </span>

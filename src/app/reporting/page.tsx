@@ -82,6 +82,16 @@ export default function ReportingPage() {
     const [switchingUser, setSwitchingUser] = useState(false);
     const initialLoadDone = useRef(false);
 
+    // Helper: Convert "HH:mm" (24hr) to "h:mm AM/PM" (12hr)
+    const to12hr = (time24: string): string => {
+        const [hStr, mStr] = time24.split(':');
+        let h = parseInt(hStr, 10);
+        const m = mStr || '00';
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        return `${h}:${m} ${ampm}`;
+    };
+
     // Initialize viewing user ID
     useEffect(() => {
         if (user && !viewingUserId) {
@@ -238,7 +248,7 @@ export default function ReportingPage() {
                     }
                 }
 
-                enhancedLog.scheduleInfo = `${slot.startTime} - ${slot.endTime}`;
+                enhancedLog.scheduleInfo = `${to12hr(slot.startTime)} - ${to12hr(slot.endTime)}`;
             }
 
             return enhancedLog;
@@ -272,7 +282,7 @@ export default function ReportingPage() {
                             status: 'completed', // Technically never started
                             isMissed: true,
                             missedDate: checkDate,
-                            scheduleInfo: `${Slot.startTime} - ${Slot.endTime}`
+                            scheduleInfo: `${to12hr(Slot.startTime)} - ${to12hr(Slot.endTime)}`
                         });
                     }
                 }

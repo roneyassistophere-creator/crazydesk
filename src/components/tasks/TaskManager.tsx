@@ -120,7 +120,8 @@ const isTaskOverdue = (task: { deadline?: string; status: string }) => {
 };
 
 const getNextRecurringDeadline = (recurrence: string, baseDate: Date, recurringDays?: string[], recurringDate?: number): string => {
-  const d = new Date(baseDate);
+  // Ensure we work in local time by creating a date at noon to avoid timezone edge issues
+  const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 12, 0, 0);
   switch (recurrence) {
     case 'daily':
       d.setDate(d.getDate() + 1);
@@ -1057,53 +1058,65 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
 
-    tasks.filter(t => t.type === 'recurring' && t.status !== 'done' && t.deadline).forEach(async (task) => {
-      const deadline = new Date(task.deadline);
+    const overdueTasks = tasks.filter(t => {
+      if (t.type !== 'recurring' || t.status === 'done' || !t.deadline) return false;
+      const deadline = new Date(t.deadline);
       deadline.setHours(0, 0, 0, 0);
-      if (deadline >= today) return;
-
+      if (deadline >= today) return false;
       // Guard: already processed in this session
-      const key = `${task.id}_${task.deadline}`;
-      if (overdueProcessedRef.current.has(key)) return;
-      overdueProcessedRef.current.add(key);
-
+      const key = `${t.id}_${t.deadline}`;
+      if (overdueProcessedRef.current.has(key)) return false;
       // Guard: already auto-advanced today
-      if (task.lastAutoAdvanced === todayStr) return;
-
-      // Calculate next future deadline
-      let nextDate = new Date(deadline);
-      let iterations = 0;
-      while (nextDate < today && iterations < 365) {
-        const nextStr = getNextRecurringDeadline(task.recurrence || 'daily', nextDate, task.recurringDays, task.recurringDate);
-        nextDate = new Date(nextStr);
-        iterations++;
-      }
-
-      try {
-        // Create overdue simple task for the missed period
-        await addDoc(collection(db, 'tasks'), {
-          title: task.title || 'Untitled Task',
-          type: 'simple',
-          status: 'todo',
-          priority: 'urgent',
-          deadline: task.deadline,
-          createdAt: serverTimestamp(),
-          createdBy: task.createdBy,
-          createdByName: task.createdByName || '',
-          isOverdueInstance: true,
-          recurringParentId: task.id,
-        });
-
-        // Advance the recurring task
-        await updateDoc(doc(db, 'tasks', task.id), {
-          deadline: nextDate.toISOString().split('T')[0],
-          status: 'todo',
-          lastAutoAdvanced: todayStr,
-        });
-      } catch (e) {
-        console.error('Auto-advance recurring task error:', e);
-      }
+      if (t.lastAutoAdvanced === todayStr) return false;
+      return true;
     });
+
+    if (overdueTasks.length === 0) return;
+
+    (async () => {
+      for (const task of overdueTasks) {
+        const key = `${task.id}_${task.deadline}`;
+        overdueProcessedRef.current.add(key);
+
+        // Parse deadline in local time to avoid timezone day-shift issues
+        const [y, m, dd] = task.deadline.split('-').map(Number);
+        const deadline = new Date(y, m - 1, dd);
+
+        // Calculate next future deadline
+        let nextDate = new Date(deadline);
+        let iterations = 0;
+        while (nextDate < today && iterations < 365) {
+          const nextStr = getNextRecurringDeadline(task.recurrence || 'daily', nextDate, task.recurringDays, task.recurringDate);
+          nextDate = new Date(nextStr);
+          iterations++;
+        }
+
+        try {
+          // Create overdue simple task for the missed period
+          await addDoc(collection(db, 'tasks'), {
+            title: task.title || 'Untitled Task',
+            type: 'simple',
+            status: 'todo',
+            priority: 'urgent',
+            deadline: task.deadline,
+            createdAt: serverTimestamp(),
+            createdBy: task.createdBy,
+            createdByName: task.createdByName || '',
+            isOverdueInstance: true,
+            recurringParentId: task.id,
+          });
+
+          // Advance the recurring task
+          await updateDoc(doc(db, 'tasks', task.id), {
+            deadline: nextDate.toISOString().split('T')[0],
+            status: 'todo',
+            lastAutoAdvanced: todayStr,
+          });
+        } catch (e) {
+          console.error('Auto-advance recurring task error:', e);
+        }
+      }
+    })();
   }, [tasks, user, loading]);
 
   const allSimple = tasks.filter(t => t.type === 'simple');
@@ -1157,21 +1170,8 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
   const createRecurringTask = async (recurrence: 'daily' | 'weekly' | 'monthly') => {
     const effectiveUserId = targetUserId || user!.uid;
     const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
-    // Set initial deadline based on recurrence
-    const now = new Date();
-    let deadline = '';
-    switch (recurrence) {
-      case 'daily':
-        now.setDate(now.getDate() + 1);
-        break;
-      case 'weekly':
-        now.setDate(now.getDate() + 7);
-        break;
-      case 'monthly':
-        now.setMonth(now.getMonth() + 1);
-        break;
-    }
-    deadline = now.toISOString().split('T')[0];
+    // Set initial deadline to TODAY so user can complete it right away
+    const deadline = new Date().toISOString().split('T')[0];
     await addDoc(collection(db, 'tasks'), {
       title: '',
       type: 'recurring',
@@ -1192,7 +1192,8 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
 
   const handleRecurringDone = async (task: TaskDoc) => {
     const todayStr = new Date().toISOString().split('T')[0];
-    const base = task.deadline ? new Date(task.deadline) : new Date();
+    // Parse deadline in local time to avoid timezone day-shift issues
+    const base = task.deadline ? (() => { const [y, m, d] = task.deadline.split('-').map(Number); return new Date(y, m - 1, d); })() : new Date();
     const nextDeadline = getNextRecurringDeadline(task.recurrence || 'daily', base, task.recurringDays, task.recurringDate);
     await updateTask(task.id, {
       lastCompletedAt: todayStr,
