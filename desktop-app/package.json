@@ -17,6 +17,7 @@
     "asarUnpack": [
       ".env"
     ],
+    "afterPack": "./scripts/afterPack.js",
     "protocols": [
       {
         "name": "CrazyDesk Protocol",
