@@ -141,14 +141,16 @@ service cloud.firestore {
 
     // Task Requests (request-to-add-task between team members)
     match /task_requests/{requestId} {
-      // Users can read requests they sent or received
-      allow read: if isAuthenticated() && 
-        (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid);
+      // Admins/Managers can read all requests; users can read requests they sent or received
+      allow read: if isManagerOrAdmin() ||
+        (isAuthenticated() && resource.data.fromUserId == request.auth.uid) || 
+        (isAuthenticated() && resource.data.toUserId == request.auth.uid);
       // Any authenticated user can create a task request
       allow create: if isAuthenticated();
-      // Sender or recipient can update (accept/reject)
-      allow update: if isAuthenticated() && 
-        (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid);
+      // Admins/Managers can update any request; sender or recipient can update (accept/reject)
+      allow update: if isManagerOrAdmin() ||
+        (isAuthenticated() && resource.data.fromUserId == request.auth.uid) || 
+        (isAuthenticated() && resource.data.toUserId == request.auth.uid);
       // Sender or recipient can delete, admins too
       allow delete: if isAuthenticated() && 
         (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid || isManagerOrAdmin());

@@ -973,6 +973,9 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
     const unsub = onSnapshot(q, (snap) => {
       const pendingCount = snap.docs.filter(d => d.data().status === 'pending').length;
       setPendingRequestCount(pendingCount);
+    }, (error) => {
+      console.error('Task requests listener error:', error);
+      setPendingRequestCount(0);
     });
     return () => unsub();
   }, [user]);
@@ -1136,58 +1139,73 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
 
   // ─── CRUD ─────────────────────────────────────────────────
   const createSimpleTask = async () => {
-    const effectiveUserId = targetUserId || user!.uid;
-    const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
-    await addDoc(collection(db, 'tasks'), {
-      title: '',
-      type: 'simple',
-      status: 'todo',
-      priority: 'normal',
-      deadline: '',
-      createdAt: serverTimestamp(),
-      createdBy: effectiveUserId,
-      createdByName: effectiveUserName,
-    });
+    try {
+      const effectiveUserId = targetUserId || user!.uid;
+      const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
+      await addDoc(collection(db, 'tasks'), {
+        title: '',
+        type: 'simple',
+        status: 'todo',
+        priority: 'normal',
+        deadline: '',
+        createdAt: serverTimestamp(),
+        createdBy: effectiveUserId,
+        createdByName: effectiveUserName,
+      });
+    } catch (err) {
+      console.error('Failed to create simple task:', err);
+      alert('Failed to create task. Please try again.');
+    }
   };
 
   const createListTask = async () => {
-    const effectiveUserId = targetUserId || user!.uid;
-    const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
-    const ref = await addDoc(collection(db, 'tasks'), {
-      title: '',
-      type: 'list',
-      status: 'todo',
-      priority: 'normal',
-      deadline: '',
-      customColumns: [],
-      createdAt: serverTimestamp(),
-      createdBy: effectiveUserId,
-      createdByName: effectiveUserName,
-    });
-    setExpandedLists(prev => new Set(prev).add(ref.id));
+    try {
+      const effectiveUserId = targetUserId || user!.uid;
+      const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
+      const ref = await addDoc(collection(db, 'tasks'), {
+        title: '',
+        type: 'list',
+        status: 'todo',
+        priority: 'normal',
+        deadline: '',
+        customColumns: [],
+        createdAt: serverTimestamp(),
+        createdBy: effectiveUserId,
+        createdByName: effectiveUserName,
+      });
+      setExpandedLists(prev => new Set(prev).add(ref.id));
+    } catch (err) {
+      console.error('Failed to create list task:', err);
+      alert('Failed to create task. Please try again.');
+    }
   };
 
   const createRecurringTask = async (recurrence: 'daily' | 'weekly' | 'monthly') => {
-    const effectiveUserId = targetUserId || user!.uid;
-    const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
-    // Set initial deadline to TODAY so user can complete it right away
-    const deadline = new Date().toISOString().split('T')[0];
-    await addDoc(collection(db, 'tasks'), {
-      title: '',
-      type: 'recurring',
-      status: 'todo',
-      priority: 'normal',
-      deadline,
-      recurrence,
-      recurringTime: '',
-      recurringDays: recurrence === 'weekly' ? [] : undefined,
-      recurringDate: recurrence === 'monthly' ? new Date().getDate() : undefined,
-      lastCompletedAt: '',
-      lastAutoAdvanced: '',
-      createdAt: serverTimestamp(),
-      createdBy: effectiveUserId,
-      createdByName: effectiveUserName,
-    });
+    try {
+      const effectiveUserId = targetUserId || user!.uid;
+      const effectiveUserName = targetUserName || user!.displayName || user!.email || 'Unknown';
+      // Set initial deadline to TODAY so user can complete it right away
+      const deadline = new Date().toISOString().split('T')[0];
+      await addDoc(collection(db, 'tasks'), {
+        title: '',
+        type: 'recurring',
+        status: 'todo',
+        priority: 'normal',
+        deadline,
+        recurrence,
+        recurringTime: '',
+        ...(recurrence === 'weekly' ? { recurringDays: [] } : {}),
+        ...(recurrence === 'monthly' ? { recurringDate: new Date().getDate() } : {}),
+        lastCompletedAt: '',
+        lastAutoAdvanced: '',
+        createdAt: serverTimestamp(),
+        createdBy: effectiveUserId,
+        createdByName: effectiveUserName,
+      });
+    } catch (err) {
+      console.error('Failed to create recurring task:', err);
+      alert('Failed to create recurring task. Please try again.');
+    }
   };
 
   const handleRecurringDone = async (task: TaskDoc) => {
@@ -1507,7 +1525,7 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
         <div className="flex-1 overflow-y-auto space-y-6 sm:space-y-8">
           {sectionOrder.map((sectionKey, sectionIdx) => {
             // ===== SIMPLE TASKS =====
-            if (sectionKey === 'simple' && allSimple.length > 0) return (
+            if (sectionKey === 'simple') return (
             <div key="simple" className="overflow-hidden">
               <div className="flex items-center gap-2 mb-2 sm:mb-3">
                 <CheckSquare className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
@@ -1713,7 +1731,7 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
           );
 
             // ===== RECURRING TASKS =====
-            if (sectionKey === 'recurring' && allRecurring.length > 0) return (
+            if (sectionKey === 'recurring') return (
             <div key="recurring" className="overflow-hidden">
               <div className="flex items-center gap-2 mb-2 sm:mb-3">
                 <Repeat className="w-4 h-4 sm:w-5 sm:h-5 text-accent" />
@@ -1987,7 +2005,7 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
           );
 
             // ===== LIST TASKS =====
-            if (sectionKey === 'list' && allList.length > 0) return (
+            if (sectionKey === 'list') return (
             <div key="list" className="overflow-hidden">
               <div className="flex items-center gap-2 mb-2 sm:mb-3">
                 <LayoutList className="w-4 h-4 sm:w-5 sm:h-5 text-secondary" />
@@ -2286,25 +2304,6 @@ export default function TaskManager({ targetUserId, targetUserName }: TaskManage
 
             return null;
           })}
-
-          {/* Empty State — centered + button */}
-          {allSimple.length === 0 && allList.length === 0 && allRecurring.length === 0 && canAddTasks && (
-            <AddTaskPopupButton centered />
-          )}
-          {allSimple.length === 0 && allList.length === 0 && allRecurring.length === 0 && !canAddTasks && (
-            <div className="flex flex-col items-center justify-center py-16 text-base-content/50">
-              <LayoutList className="w-16 h-16 mb-4 opacity-20" />
-              <p className="text-lg font-medium mb-2">
-                {targetUserName ? `No tasks for ${targetUserName}` : 'No tasks yet'}
-              </p>
-              <p className="text-sm">No tasks have been created yet</p>
-            </div>
-          )}
-
-          {/* Bottom + button when tasks exist */}
-          {(allSimple.length > 0 || allList.length > 0 || allRecurring.length > 0) && canAddTasks && (
-            <AddTaskPopupButton />
-          )}
         </div>
       )}
 
