@@ -88,14 +88,15 @@ export default function Settings() {
   };
 
   const executeAction = async (action: () => Promise<void>) => {
-    // Determine user ID from context or pass it? For simplistic handling, we set a global loading state if needed
-    // or rely on optimistic updates. Since onSnapshot handles UI, we just await the action.
     try {
+      setActionLoading('modal');
       await action();
       closeModal();
     } catch (error) {
       console.error('Action failed:', error);
-      // Maybe show toast error here?
+      // Modal stays open so user can see something went wrong
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -191,11 +192,22 @@ export default function Settings() {
     setModalConfig({
       isOpen: true,
       title: 'Delete User',
-      message: `Are you sure you want to permanently delete ${user.displayName}? This action cannot be undone and will remove all their data.`,
+      message: `Are you sure you want to permanently delete ${user.displayName}? This action cannot be undone and will remove their profile and related data.`,
       type: 'danger',
       confirmText: 'Delete Permanently',
       onConfirm: async () => {
-        await deleteDoc(doc(db, 'users', user.uid));
+        try {
+          // Delete user profile
+          await deleteDoc(doc(db, 'users', user.uid));
+          // Also delete member_profile if it exists
+          try { await deleteDoc(doc(db, 'member_profiles', user.uid)); } catch (_) {}
+          console.log(`[Settings] User ${user.displayName} (${user.uid}) deleted successfully`);
+        } catch (err: unknown) {
+          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+          console.error('[Settings] Failed to delete user:', err);
+          alert(`Failed to delete user: ${errorMessage}`);
+          throw err; // Re-throw so executeAction doesn't close modal
+        }
       }
     });
   };
