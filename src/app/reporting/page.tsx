@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase/config';
-import { collection, query, where, getDocs, doc, getDoc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, deleteDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import { WorkLog } from '@/types/workLog';
 import { TimeSlot, MemberProfile, DAYS_OF_WEEK } from '@/types/team';
 import { useUsers } from '@/hooks/useUsers';
@@ -45,8 +45,10 @@ import {
     ChevronLeft, 
     ChevronRight, 
     CalendarDays,
-    Users
+    Users,
+    Trash2
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 interface EnhancedLog extends WorkLog {
     isLate?: boolean;
@@ -80,7 +82,52 @@ export default function ReportingPage() {
     const [rawLogs, setRawLogs] = useState<WorkLog[]>([]);
     const [userSchedule, setUserSchedule] = useState<TimeSlot[]>([]);
     const [switchingUser, setSwitchingUser] = useState(false);
+    const [clearing, setClearing] = useState(false);
+    const [deletingLogId, setDeletingLogId] = useState<string | null>(null);
     const initialLoadDone = useRef(false);
+
+    const handleDeleteReport = async (logId: string) => {
+        if (!isAdminOrManager) return;
+        if (!confirm('Permanently delete this log entry? This cannot be undone.')) return;
+        setDeletingLogId(logId);
+        try {
+            await deleteDoc(doc(db, 'work_logs', logId));
+            setRawLogs(prev => prev.filter(l => l.id !== logId));
+            toast.success('Log deleted.');
+        } catch (e) {
+            console.error('Delete report error:', e);
+            toast.error('Failed to delete log.');
+        } finally {
+            setDeletingLogId(null);
+        }
+    };
+
+    const handleClearLogs = async () => {
+        const { start, end } = getDateRange();
+        const logsToDelete = rawLogs.filter(log => {
+            const logDate = log.checkInTime?.toDate?.();
+            return logDate && isWithinInterval(logDate, { start, end });
+        });
+        if (logsToDelete.length === 0) {
+            toast('No logs to clear for this period.');
+            return;
+        }
+        const userName = viewingUser?.displayName || (viewingUserId === user?.uid ? 'yourself' : 'this user');
+        if (!confirm(`Delete ${logsToDelete.length} log(s) for ${userName} in "${getDateRange().label}"? This cannot be undone.`)) return;
+        setClearing(true);
+        try {
+            const batch = writeBatch(db);
+            logsToDelete.forEach(log => batch.delete(doc(db, 'work_logs', log.id)));
+            await batch.commit();
+            setRawLogs(prev => prev.filter(l => !logsToDelete.find(d => d.id === l.id)));
+            toast.success(`${logsToDelete.length} log(s) deleted.`);
+        } catch (e) {
+            console.error('Clear logs error:', e);
+            toast.error('Failed to delete logs.');
+        } finally {
+            setClearing(false);
+        }
+    };
 
     // Helper: Convert "HH:mm" (24hr) to "h:mm AM/PM" (12hr)
     const to12hr = (time24: string): string => {
@@ -343,6 +390,17 @@ export default function ReportingPage() {
                     </div>
                     
                     <div className="flex flex-col items-end gap-3">
+                        {isAdminOrManager && combinedLogs.filter(l => !l.isMissed).length > 0 && (
+                            <button
+                                onClick={handleClearLogs}
+                                disabled={clearing}
+                                className="btn btn-sm btn-error btn-outline self-end"
+                                title={`Clear logs for ${getDateRange().label}`}
+                            >
+                                {clearing ? <span className="loading loading-spinner loading-xs" /> : <Trash2 size={14} />}
+                                Clear Logs
+                            </button>
+                        )}
                         <div className="join self-start sm:self-center bg-base-200/50 p-1 rounded-full border border-base-200 shrink-0">
                             <button className={`join-item btn btn-sm rounded-full border-none px-6 ${filter === 'daily' ? 'bg-white shadow-sm text-primary hover:bg-white' : 'btn-ghost opacity-60 hover:opacity-100 hover:bg-base-200'}`} onClick={()=>setFilter('daily')}>Daily</button>
                             <button className={`join-item btn btn-sm rounded-full border-none px-6 ${filter === 'weekly' ? 'bg-white shadow-sm text-primary hover:bg-white' : 'btn-ghost opacity-60 hover:opacity-100 hover:bg-base-200'}`} onClick={()=>setFilter('weekly')}>Weekly</button>
@@ -352,51 +410,58 @@ export default function ReportingPage() {
                 </div>
 
                 {/* Date Navigation Slider */}
-                <div className="flex items-center justify-center bg-base-100 p-2 rounded-2xl border border-base-200 shadow-sm w-full max-w-sm mx-auto relative group">
-                    <button 
-                        className="btn btn-ghost btn-circle btn-sm text-base-content/60 hover:bg-base-200 hover:text-primary" 
-                        onClick={handlePrevious}
-                        title="Previous"
-                    >
-                        <ChevronLeft size={20}/>
-                    </button>
-                    
-                    <div 
-                        className="flex-1 text-center relative px-2 cursor-pointer hover:bg-base-200/50 py-1.5 rounded-xl transition-all group/date" 
-                        onClick={() => dateInputRef.current?.showPicker()}
-                    >
-                        <div className="flex items-center justify-center gap-2 text-sm font-bold opacity-80 group-hover/date:opacity-100 group-hover/date:text-primary transition-colors">
-                            <CalendarIcon size={16} />
-                            <span className="select-none tracking-tight">{getDateRange().label}</span>
+                <div className="flex items-center justify-center gap-2 w-full max-w-md mx-auto">
+                    <div className="flex items-center flex-1 bg-base-100 p-2 rounded-2xl border border-base-200 shadow-sm relative group">
+                        <button 
+                            className="btn btn-ghost btn-circle btn-sm text-base-content/60 hover:bg-base-200 hover:text-primary" 
+                            onClick={handlePrevious}
+                            title="Previous"
+                        >
+                            <ChevronLeft size={20}/>
+                        </button>
+                        
+                        <div 
+                            className="flex-1 text-center relative px-2 cursor-pointer hover:bg-base-200/50 py-1.5 rounded-xl transition-all group/date" 
+                            onClick={() => dateInputRef.current?.showPicker()}
+                        >
+                            <div className="flex items-center justify-center gap-2 text-sm font-bold opacity-80 group-hover/date:opacity-100 group-hover/date:text-primary transition-colors">
+                                <CalendarIcon size={16} />
+                                <span className="select-none tracking-tight">{getDateRange().label}</span>
+                            </div>
+                            {/* Native Date Picker hidden trigger */}
+                            <input 
+                                ref={dateInputRef}
+                                type="date" 
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                value={format(currentDate, 'yyyy-MM-dd')}
+                                onChange={(e) => {
+                                    const date = new Date(e.target.value);
+                                    if (!isNaN(date.getTime())) {
+                                        const ymd = e.target.value.split('-').map(Number);
+                                        const localDate = new Date(ymd[0], ymd[1] - 1, ymd[2]);
+                                        setCurrentDate(localDate);
+                                    }
+                                }}
+                            />
                         </div>
-                        {/* Native Date Picker hidden trigger */}
-                        <input 
-                            ref={dateInputRef}
-                            type="date" 
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                            value={format(currentDate, 'yyyy-MM-dd')}
-                            onChange={(e) => {
-                                const date = new Date(e.target.value);
-                                if (!isNaN(date.getTime())) {
-                                    // Adjust for local timezone drift if needed, but standard date input usually works
-                                    // Creating date from yyyy-mm-dd strings sets it to UTC midnight often, 
-                                    // so adding time or handling timezone might be needed depending on browser.
-                                    // Since we only care about the date part (and startOfDay/endOfDay handles it), new Date(value) is usually fine in local context.
-                                    const ymd = e.target.value.split('-').map(Number);
-                                    const localDate = new Date(ymd[0], ymd[1] - 1, ymd[2]);
-                                    setCurrentDate(localDate);
-                                }
-                            }}
-                        />
+
+                        <button 
+                            className="btn btn-ghost btn-circle btn-sm text-base-content/60 hover:bg-base-200 hover:text-primary" 
+                            onClick={handleNext}
+                            title="Next"
+                        >
+                            <ChevronRight size={20}/>
+                        </button>
                     </div>
 
-                    <button 
-                        className="btn btn-ghost btn-circle btn-sm text-base-content/60 hover:bg-base-200 hover:text-primary" 
-                        onClick={handleNext}
-                        title="Next"
-                    >
-                        <ChevronRight size={20}/>
-                    </button>
+                    {!isSameDay(currentDate, new Date()) && (
+                        <button
+                            className="btn btn-sm btn-primary btn-outline rounded-xl"
+                            onClick={() => setCurrentDate(new Date())}
+                        >
+                            Today
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -428,7 +493,7 @@ export default function ReportingPage() {
                         }
 
                         return (
-                            <div key={log.id} className="card bg-base-100 shadow-md hover:shadow-lg transition-all border border-base-200 relative overflow-hidden">
+                            <div key={log.id} className="card bg-base-100 shadow-md hover:shadow-lg transition-all border border-base-200 relative overflow-hidden group">
                                 {log.isLate && (
                                     <div className="absolute top-0 right-0 bg-warning text-warning-content text-[10px] font-bold px-2 py-1 rounded-bl-lg flex items-center gap-1">
                                         <Clock size={10} /> Late Check-in
@@ -475,7 +540,27 @@ export default function ReportingPage() {
                                                         <div className="badge badge-ghost font-mono text-xs">
                                                             {Math.floor(log.durationMinutes / 60)}h {log.durationMinutes % 60}m worked
                                                         </div>
-                                                        {log.breakDurationMinutes && log.breakDurationMinutes > 0 ? (
+                                                        {log.breaks && log.breaks.length > 0 ? (
+                                                            <div className="flex flex-col gap-1">
+                                                                <div className="badge badge-warning badge-outline font-mono text-xs gap-1 opacity-70">
+                                                                    <Coffee size={8} />
+                                                                    {log.breakDurationMinutes ? `${Math.floor(log.breakDurationMinutes / 60)}h ${log.breakDurationMinutes % 60}m` : '0m'} total break
+                                                                </div>
+                                                                {log.breaks.map((b: any, i: number) => {
+                                                                    const start = b.startTime?.toDate?.() ? format(b.startTime.toDate(), 'h:mm a') : '?';
+                                                                    const end = b.endTime?.toDate?.() ? format(b.endTime.toDate(), 'h:mm a') : 'ongoing';
+                                                                    const dur = b.durationMinutes ? `${b.durationMinutes}m` : null;
+                                                                    return (
+                                                                        <div key={i} className="text-[11px] text-warning/80 flex items-center gap-1">
+                                                                            <Coffee size={9} className="shrink-0" />
+                                                                            <span className="font-mono">{start} – {end}</span>
+                                                                            {dur && <span className="opacity-60">({dur})</span>}
+                                                                            {b.note && <span className="truncate ml-1 opacity-70">· {b.note}</span>}
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        ) : log.breakDurationMinutes && log.breakDurationMinutes > 0 ? (
                                                             <div className="badge badge-warning badge-outline font-mono text-xs gap-1 opacity-70">
                                                                 <Coffee size={8} />
                                                                 {Math.floor(log.breakDurationMinutes / 60)}h {log.breakDurationMinutes % 60}m break
@@ -535,6 +620,16 @@ export default function ReportingPage() {
                                         </div>
                                     </div>
                                 </div>
+                                {isAdminOrManager && (
+                                    <button
+                                        onClick={() => handleDeleteReport(log.id)}
+                                        disabled={deletingLogId === log.id}
+                                        className="absolute bottom-3 right-3 btn btn-xs btn-circle btn-error opacity-0 group-hover:opacity-100 transition-opacity"
+                                        title="Delete this log"
+                                    >
+                                        {deletingLogId === log.id ? <span className="loading loading-spinner loading-xs" /> : <Trash2 size={12} />}
+                                    </button>
+                                )}
                             </div>
                         );
                     })

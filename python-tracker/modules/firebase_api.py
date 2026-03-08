@@ -214,12 +214,15 @@ def _get_session_by_id(session_id: str) -> dict | None:
         return None
 
 
-def start_break(session_id: str):
+def start_break(session_id: str, note: str = ""):
     session = _get_session_by_id(session_id)
     if not session:
         return
     breaks = session.get("breaks", []) or []
-    breaks.append({"startTime": datetime.now(timezone.utc)})
+    entry: dict = {"startTime": datetime.now(timezone.utc)}
+    if note:
+        entry["note"] = note
+    breaks.append(entry)
     _firestore_req(
         "PATCH",
         f"/work_logs/{session_id}?updateMask.fieldPaths=status&updateMask.fieldPaths=breaks",

@@ -2,9 +2,11 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase/config';
-import { collection, query, where, getDocs, getDoc, doc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, updateDoc, deleteDoc, onSnapshot, writeBatch, Timestamp } from 'firebase/firestore';
 import { UserProfile, UserRole, UserStatus } from '@/types/auth';
-import { CheckCircle, XCircle, Clock, Users, Trash2, AlertTriangle, UserPlus, UserMinus } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Users, Trash2, AlertTriangle, UserPlus, UserMinus, Database } from 'lucide-react';
+import { supabase } from '@/lib/supabase/config';
+import toast from 'react-hot-toast';
 import ConfirmationModal from '@/components/ui/ConfirmationModal';
 import { useRouter } from 'next/navigation';
 import UserAvatar from '@/components/common/UserAvatar';
@@ -26,6 +28,13 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<'ALL' | 'MANAGER' | 'TEAM_MEMBER'>('ALL');
+
+  // Database management state
+  const [clearTarget, setClearTarget] = useState<'work_logs' | 'tracker_logs' | 'both'>('work_logs');
+  const [clearUser, setClearUser] = useState<string>('all');
+  const [clearDateFrom, setClearDateFrom] = useState('');
+  const [clearDateTo, setClearDateTo] = useState('');
+  const [clearLoading, setClearLoading] = useState(false);
   
   const [modalConfig, setModalConfig] = useState<ModalConfig>({
     isOpen: false,
@@ -234,6 +243,59 @@ export default function Settings() {
   };
 
   const hasRole = (user: UserProfile, role: UserRole) => user.allowedRoles?.includes(role);
+
+  const handleDatabaseClear = async () => {
+    if (!clearDateFrom || !clearDateTo) {
+      toast.error('Please select a date range.');
+      return;
+    }
+    const ymdFrom = clearDateFrom.split('-').map(Number);
+    const ymdTo = clearDateTo.split('-').map(Number);
+    const fromDate = new Date(ymdFrom[0], ymdFrom[1] - 1, ymdFrom[2], 0, 0, 0, 0);
+    const toDate = new Date(ymdTo[0], ymdTo[1] - 1, ymdTo[2], 23, 59, 59, 999);
+    const fromTs = Timestamp.fromDate(fromDate);
+    const toTs = Timestamp.fromDate(toDate);
+    const targetLabel = clearTarget === 'work_logs' ? 'Work Logs' : clearTarget === 'tracker_logs' ? 'Tracker Logs' : 'Work Logs + Tracker Logs';
+    const userLabel = clearUser === 'all' ? 'all users' : (approvedUsers.find(u => u.uid === clearUser)?.displayName || clearUser);
+    if (!confirm(`⚠️ Permanently delete ${targetLabel} for ${userLabel} from ${clearDateFrom} to ${clearDateTo}?\n\nThis cannot be undone.`)) return;
+    setClearLoading(true);
+    let totalDeleted = 0;
+    try {
+      const batchDelete = async (docs: any[]) => {
+        const CHUNK = 450;
+        for (let i = 0; i < docs.length; i += CHUNK) {
+          const b = writeBatch(db);
+          docs.slice(i, i + CHUNK).forEach(d => b.delete(d.ref));
+          await b.commit();
+        }
+      };
+      const clearCollection = async (colName: string, tsField: string) => {
+        const constraints: any[] = [where(tsField, '>=', fromTs), where(tsField, '<=', toTs)];
+        if (clearUser !== 'all') constraints.push(where('userId', '==', clearUser));
+        const snap = await getDocs(query(collection(db, colName), ...constraints));
+        if (snap.empty) return 0;
+        if (colName === 'tracker_logs') {
+          const files: string[] = [];
+          snap.docs.forEach(d => {
+            const data = d.data();
+            const urls = [...(data.screenshotUrls || [data.screenshotUrl].filter(Boolean)), data.cameraImageUrl].filter(Boolean);
+            urls.forEach((url: string) => { const f = url.split('/tracker-evidence/')[1]; if (f) files.push(f); });
+          });
+          if (files.length) await supabase.storage.from('tracker-evidence').remove(files);
+        }
+        await batchDelete(snap.docs);
+        return snap.size;
+      };
+      if (clearTarget === 'work_logs' || clearTarget === 'both') totalDeleted += await clearCollection('work_logs', 'checkInTime');
+      if (clearTarget === 'tracker_logs' || clearTarget === 'both') totalDeleted += await clearCollection('tracker_logs', 'timestamp');
+      toast.success(`${totalDeleted} record(s) deleted successfully.`);
+    } catch (e) {
+      console.error('Database clear error:', e);
+      toast.error('Failed to clear data. Check console for details.');
+    } finally {
+      setClearLoading(false);
+    }
+  };
 
   if (!profile || (profile.role !== 'ADMIN' && profile.role !== 'MANAGER')) {
     return (
@@ -460,6 +522,54 @@ export default function Settings() {
                 </tbody>
               </table>
             </div>
+        </div>
+      </div>
+
+      {/* Database Management Section */}
+      <div className="card bg-base-200 shadow-xl border border-error/30">
+        <div className="card-body">
+          <div className="flex items-center gap-2 mb-1">
+            <Database className="text-error" size={22} />
+            <h2 className="card-title text-error">Database Management</h2>
+          </div>
+          <p className="text-sm text-base-content/60 mb-5">Permanently delete reporting or tracker log data within a date range. This cannot be undone.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="form-control">
+              <label className="label pb-1"><span className="label-text font-semibold">Data Type</span></label>
+              <select className="select select-bordered select-sm" value={clearTarget} onChange={e => setClearTarget(e.target.value as any)}>
+                <option value="work_logs">Work Logs (Reporting)</option>
+                <option value="tracker_logs">Tracker Logs (Web Tracker)</option>
+                <option value="both">Both</option>
+              </select>
+            </div>
+            <div className="form-control">
+              <label className="label pb-1"><span className="label-text font-semibold">User</span></label>
+              <select className="select select-bordered select-sm" value={clearUser} onChange={e => setClearUser(e.target.value)}>
+                <option value="all">All Users</option>
+                {approvedUsers.map(u => (
+                  <option key={u.uid} value={u.uid}>{u.displayName || u.email}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-control">
+              <label className="label pb-1"><span className="label-text font-semibold">From</span></label>
+              <input type="date" className="input input-bordered input-sm" value={clearDateFrom} onChange={e => setClearDateFrom(e.target.value)} />
+            </div>
+            <div className="form-control">
+              <label className="label pb-1"><span className="label-text font-semibold">To</span></label>
+              <input type="date" className="input input-bordered input-sm" value={clearDateTo} onChange={e => setClearDateTo(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex justify-end mt-5">
+            <button
+              className="btn btn-error gap-2"
+              onClick={handleDatabaseClear}
+              disabled={clearLoading || !clearDateFrom || !clearDateTo}
+            >
+              {clearLoading ? <span className="loading loading-spinner loading-sm" /> : <Trash2 size={16} />}
+              Clear Selected Data
+            </button>
+          </div>
         </div>
       </div>
 

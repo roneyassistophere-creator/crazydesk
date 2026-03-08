@@ -5,10 +5,10 @@ Screen capture  : mss (works on Windows, macOS, Linux — no prompts)
 Camera capture  : OpenCV (cv2)
 Upload          : Supabase Storage via supabase_upload module
 
-FLOW  — 1. Capture screen instantly
+FLOW  — 1. Capture each display instantly (one screenshot per monitor)
          2. Play notification sound + show "Camera in 60s" countdown
          3. At 3, 2, 1 seconds remaining → play sound each second
-         4. At 0s → capture camera → upload both → log
+         4. At 0s → capture camera → upload all → log
 
 LOCK  — Only ONE capture can run at a time.
 """
@@ -92,23 +92,27 @@ def set_countdown_callbacks(on_tick=None, on_done=None):
 
 # ── Screen capture ─────────────────────────────────────────────
 
-def capture_screen() -> bytes | None:
-    """Take a silent screenshot. Returns JPEG bytes or None."""
+def capture_screen() -> list[bytes]:
+    """Take a silent screenshot of each monitor. Returns list of JPEG bytes (one per display)."""
+    screenshots: list[bytes] = []
     try:
         with mss.mss() as sct:
-            # Grab the primary monitor (index 1; index 0 is "all monitors combined")
-            monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-            shot = sct.grab(monitor)
-            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=80)
-            jpeg_bytes = buf.getvalue()
-            logger.info("Screenshot captured: %d bytes (%dx%d)", len(jpeg_bytes), img.width, img.height)
-            return jpeg_bytes
+            # monitors[1:] are individual displays; monitors[0] is the combined bounding box
+            displays = sct.monitors[1:] if len(sct.monitors) > 1 else sct.monitors
+            for idx, monitor in enumerate(displays):
+                try:
+                    shot = sct.grab(monitor)
+                    img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=80)
+                    jpeg_bytes = buf.getvalue()
+                    logger.info("Display %d captured: %d bytes (%dx%d)", idx + 1, len(jpeg_bytes), img.width, img.height)
+                    screenshots.append(jpeg_bytes)
+                except Exception as e:
+                    logger.error("Display %d capture error: %s", idx + 1, e)
     except Exception as e:
         logger.error("Screen capture error: %s", e)
-        return None
+    return screenshots
 
 
 # ── Camera capture ─────────────────────────────────────────────
@@ -264,8 +268,8 @@ def perform_capture(capture_type: str = "auto") -> dict:
 
         logger.info("=== Starting %s capture for user: %s ===", capture_type, uid)
 
-        # Step 1: Take screenshot instantly
-        screen_bytes = capture_screen()
+        # Step 1: Take screenshots of all displays instantly
+        screen_bytes_list = capture_screen()
 
         # Step 2: Countdown warning before camera capture
         if not _run_countdown(capture_type):
@@ -274,27 +278,33 @@ def perform_capture(capture_type: str = "auto") -> dict:
         # Step 3: Take camera photo after countdown
         camera_bytes = capture_camera()
 
-        screenshot_url = None
+        # Step 4: Upload all screenshots
+        screenshot_urls: list[str] = []
+        for idx, screen_bytes in enumerate(screen_bytes_list):
+            url = upload_image(screen_bytes, f"screen{idx + 1}", uid)
+            if url:
+                screenshot_urls.append(url)
+            else:
+                logger.warning("Display %d upload failed", idx + 1)
+
+        if not screenshot_urls:
+            logger.warning("No screenshots were captured/uploaded")
+
         camera_url = None
-
-        if screen_bytes:
-            screenshot_url = upload_image(screen_bytes, "screen", uid)
-        else:
-            logger.warning("Screen capture returned None")
-
         if camera_bytes:
             camera_url = upload_image(camera_bytes, "camera", uid)
         else:
             logger.warning("Camera capture returned None")
 
-        flagged = not screenshot_url and not camera_url
+        flagged = not screenshot_urls and not camera_url
 
-        # Step 3: Save log
+        # Step 5: Save log
         try:
             save_tracker_log({
                 "userId": uid,
                 "userDisplayName": display_name,
-                "screenshotUrl": screenshot_url or "",
+                "screenshotUrl": screenshot_urls[0] if screenshot_urls else "",
+                "screenshotUrls": screenshot_urls,
                 "cameraImageUrl": camera_url or "",
                 "type": "flagged" if flagged else capture_type,
                 "flagged": flagged,
@@ -305,7 +315,7 @@ def perform_capture(capture_type: str = "auto") -> dict:
             logger.error("Failed to save tracker log: %s", e)
 
         logger.info("=== %s capture complete ===", capture_type)
-        return {"screenshot_url": screenshot_url, "camera_url": camera_url, "flagged": flagged}
+        return {"screenshot_url": screenshot_urls[0] if screenshot_urls else None, "screenshot_urls": screenshot_urls, "camera_url": camera_url, "flagged": flagged}
 
     finally:
         with _capture_lock:

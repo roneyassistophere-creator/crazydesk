@@ -58,6 +58,10 @@ export default function CheckInOutWidget({
   const [proofLink, setProofLink] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Break note
+  const [showBreakNoteModal, setShowBreakNoteModal] = useState(false);
+  const [breakNote, setBreakNote] = useState('');
+
   // Modal flow: 0=hidden, 1=choose method, 2=choose platform (mac/win), 3=open mac app, 4=open win tracker
   const [modalStep, setModalStep] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [waitingForDesktop, setWaitingForDesktop] = useState(false);
@@ -478,10 +482,11 @@ export default function CheckInOutWidget({
   }, [user, profile]);
 
   // BREAK CONTROLS
-  const handleStartBreak = useCallback(async () => {
+  const handleStartBreak = useCallback(async (note?: string) => {
     if (!currentSessionId) return;
     setLoading(true);
     setIsOnBreak(true); // optimistic
+    const breakNote = note || '';
 
     try {
       if (sessionSource === 'desktop') {
@@ -490,7 +495,7 @@ export default function CheckInOutWidget({
           const res = await fetch(`${PYTHON_TRACKER_URL}/api/break`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ note: breakNote }),
           });
           const data = await res.json();
           if (!data.ok) throw new Error(data.error || 'Break failed');
@@ -501,7 +506,7 @@ export default function CheckInOutWidget({
           const ref = doc(db, 'work_logs', currentSessionId);
           await updateDoc(ref, {
             status: 'break',
-            breaks: arrayUnion({ startTime: Timestamp.now() }),
+            breaks: arrayUnion({ startTime: Timestamp.now(), ...(breakNote ? { note: breakNote } : {}) }),
           });
           toast.success('Break started');
         }
@@ -509,7 +514,7 @@ export default function CheckInOutWidget({
         const ref = doc(db, 'work_logs', currentSessionId);
         await updateDoc(ref, {
           status: 'break',
-          breaks: arrayUnion({ startTime: Timestamp.now() }),
+          breaks: arrayUnion({ startTime: Timestamp.now(), ...(breakNote ? { note: breakNote } : {}) }),
         });
         toast.success('Break started');
       }
@@ -861,6 +866,55 @@ export default function CheckInOutWidget({
   // Modals renderer (shared by compact and full)
   const renderModals = () => (
     <>
+      {/* ═══ Break Note Modal ═══ */}
+      {showBreakNoteModal && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-bold text-lg flex items-center gap-2 mb-1">
+              <Coffee className="w-5 h-5 text-warning" /> Take a Break
+            </h3>
+            <p className="text-sm text-base-content/60 mb-4">
+              Please add a reason for your break
+            </p>
+            <textarea
+              className="textarea textarea-bordered w-full mb-4"
+              placeholder="e.g. Lunch, Coffee, Meeting..."
+              rows={2}
+              value={breakNote}
+              onChange={(e) => setBreakNote(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && breakNote.trim()) {
+                  e.preventDefault();
+                  setShowBreakNoteModal(false);
+                  handleStartBreak(breakNote.trim());
+                }
+              }}
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowBreakNoteModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-warning btn-sm gap-1"
+                onClick={() => {
+                  setShowBreakNoteModal(false);
+                  handleStartBreak(breakNote.trim());
+                }}
+                disabled={loading || !breakNote.trim()}
+              >
+                {loading ? <span className="loading loading-spinner loading-xs" /> : <Coffee className="w-3.5 h-3.5" />}
+                Start Break
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setShowBreakNoteModal(false)} />
+        </div>
+      )}
+
       {/* ═══ STEP 1: Choose Method ═══ */}
       {modalStep === 1 && (
         <div className="modal modal-open">
@@ -1174,7 +1228,7 @@ export default function CheckInOutWidget({
               )}
               {!isOnBreak ? (
                 <>
-                  <button className="btn btn-sm btn-warning gap-1.5" onClick={handleStartBreak} disabled={loading}>
+                  <button className="btn btn-sm btn-warning gap-1.5" onClick={() => { setBreakNote(''); setShowBreakNoteModal(true); }} disabled={loading}>
                     <Coffee className="w-3.5 h-3.5" /> Break
                   </button>
                   <button className="btn btn-sm btn-error gap-1.5" onClick={handleCheckOut} disabled={loading}>
@@ -1370,7 +1424,7 @@ export default function CheckInOutWidget({
                     <>
                       <button
                         className="btn btn-warning btn-sm gap-1"
-                        onClick={handleStartBreak}
+                        onClick={() => { setBreakNote(''); setShowBreakNoteModal(true); }}
                         disabled={loading}
                       >
                         <Coffee className="w-3.5 h-3.5" /> Break
@@ -1451,7 +1505,7 @@ export default function CheckInOutWidget({
                           <>
                             <button
                               className="btn btn-warning btn-sm gap-1"
-                              onClick={handleStartBreak}
+                              onClick={() => { setBreakNote(''); setShowBreakNoteModal(true); }}
                               disabled={loading}
                             >
                               <Coffee className="w-3.5 h-3.5" /> Break

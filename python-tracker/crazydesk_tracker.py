@@ -383,7 +383,8 @@ def handle_break(data: dict) -> dict:
     if is_on_break:
         return {"ok": True, "already": True}
     try:
-        start_break(session_id)
+        note = data.get("note", "")
+        start_break(session_id, note=note)
         is_on_break = True
         break_start_ms = int(time.time() * 1000)
         if _gui:

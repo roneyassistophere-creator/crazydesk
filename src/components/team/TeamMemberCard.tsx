@@ -24,6 +24,7 @@ export default function TeamMemberCard({ member, onClick, onEdit, onChat }: Team
   // Session timer state
   const [sessionSeconds, setSessionSeconds] = useState<number>(0);
   const [sessionStatus, setSessionStatus] = useState<'active' | 'break' | null>(null);
+  const [currentBreakNote, setCurrentBreakNote] = useState<string | null>(null);
   const sessionRef = useRef<{ checkIn: Date; breaks: { start: Date; end?: Date }[]; status: string } | null>(null);
 
   // Compute work seconds from session data
@@ -72,17 +73,28 @@ export default function TeamMemberCard({ member, onClick, onEdit, onChat }: Team
         sessionRef.current = { checkIn, breaks, status: data.status };
         setSessionStatus(data.status as 'active' | 'break');
         setSessionSeconds(computeWorkSeconds());
+
+        // Extract current break note (last open break)
+        const rawBreaks = data.breaks || [];
+        if (data.status === 'break' && rawBreaks.length > 0) {
+          const lastBreak = rawBreaks[rawBreaks.length - 1];
+          setCurrentBreakNote(lastBreak.note || null);
+        } else {
+          setCurrentBreakNote(null);
+        }
       } else {
         setTrackingSource(null);
         sessionRef.current = null;
         setSessionStatus(null);
         setSessionSeconds(0);
+        setCurrentBreakNote(null);
       }
     }, () => {
       setTrackingSource(null);
       sessionRef.current = null;
       setSessionStatus(null);
       setSessionSeconds(0);
+      setCurrentBreakNote(null);
     });
 
     return () => unsub();
@@ -286,13 +298,23 @@ export default function TeamMemberCard({ member, onClick, onEdit, onChat }: Team
 
             {/* Session Running Indicator */}
             {sessionStatus && (
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold mb-3 ${sessionStatus === 'break' ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}>
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold mb-3 relative group/break ${sessionStatus === 'break' ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}
+                title={sessionStatus === 'break' && currentBreakNote ? currentBreakNote : undefined}
+              >
                 <span className="relative flex h-2 w-2">
                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${sessionStatus === 'break' ? 'bg-warning' : 'bg-success'}`} />
                   <span className={`relative inline-flex rounded-full h-2 w-2 ${sessionStatus === 'break' ? 'bg-warning' : 'bg-success'}`} />
                 </span>
                 <span>{sessionStatus === 'break' ? 'On Break' : 'Session running'}</span>
                 <span className="font-mono opacity-80">· {fmtSession(sessionSeconds)}</span>
+                {sessionStatus === 'break' && currentBreakNote && (
+                  <div className="absolute left-0 right-0 -bottom-8 z-30 hidden group-hover/break:block">
+                    <div className="bg-base-300 text-base-content text-[11px] font-normal px-2.5 py-1 rounded-md shadow-lg border border-base-content/10 truncate max-w-full">
+                      {currentBreakNote}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

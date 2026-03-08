@@ -2,6 +2,7 @@ export interface BreakSession {
   startTime: any; // Firestore Timestamp
   endTime?: any; // Firestore Timestamp | null
   durationMinutes?: number;
+  note?: string;
 }
 
 export interface TrackerLog {
@@ -10,6 +11,7 @@ export interface TrackerLog {
   userDisplayName: string;
   timestamp: any;
   screenshotUrl?: string;
+  screenshotUrls?: string[];
   cameraImageUrl?: string;
   type: 'auto' | 'manual';
 }
