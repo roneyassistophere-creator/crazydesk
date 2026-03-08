@@ -74,6 +74,17 @@ _capture_in_progress = False
 _capture_lock = threading.Lock()
 _countdown_cancel = threading.Event()
 
+# ── Break state — set from main tracker when user starts/ends a break ──
+_is_on_break: bool = False
+
+
+def set_break_status(on_break: bool):
+    """Pause or resume captures based on whether the user is on break."""
+    global _is_on_break
+    _is_on_break = on_break
+    logger.info("Break status: %s", "ON BREAK — captures paused" if on_break else "active")
+
+
 # GUI callback for countdown display (set from main tracker)
 _on_countdown_tick = None   # fn(remaining_seconds, capture_type) or None
 _on_countdown_done = None   # fn() — called when countdown finishes
@@ -243,6 +254,11 @@ def perform_capture(capture_type: str = "auto") -> dict:
     """
     global _capture_in_progress, _last_capture_time
 
+    # Guard: skip if user is on break
+    if _is_on_break:
+        logger.info("Skipping %s capture — user is on break", capture_type)
+        return {"screenshot_url": None, "camera_url": None, "flagged": False, "skipped": True, "on_break": True}
+
     # Guard: skip if another capture already running OR too soon after last capture
     with _capture_lock:
         if _capture_in_progress:
@@ -355,6 +371,11 @@ def _reschedule_after_capture():
 
 def _do_auto_capture():
     if not _auto_running:
+        return
+    # Skip if user is on break — recheck in 5 minutes
+    if _is_on_break:
+        logger.info("Auto-capture skipped — user is on break, rechecking in 5 min")
+        _schedule_next(5 * 60)
         return
     if _capture_in_progress:
         logger.info("Auto-capture skipped — another capture in progress, rescheduling")

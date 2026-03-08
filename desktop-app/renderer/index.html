@@ -202,7 +202,7 @@
       saveActivityLog, updateHeartbeat, emergencyCheckOut,
       getSessionStatus,
     } from '../modules/firebase.mjs';
-    import { performCapture, startAllTracking, stopAllTracking, isCaptureInProgress } from '../modules/capture.mjs';
+    import { performCapture, startAllTracking, stopAllTracking, isCaptureInProgress, setBreakStatus } from '../modules/capture.mjs';
 
     const $ = id => document.getElementById(id);
     const waitingScreen = $('waiting-screen');
@@ -293,6 +293,19 @@
           if (status === 'completed') {
             console.log('[Heartbeat] Session completed from web — stopping tracker');
             handleWebCheckout();
+          } else if (status === 'break' && !isOnBreak) {
+            console.log('[Heartbeat] Break started from web — pausing captures');
+            isOnBreak = true;
+            breakStartMs = breakStartMs || Date.now();
+            setBreakStatus(true);
+            updateUI();
+          } else if (status === 'active' && isOnBreak) {
+            console.log('[Heartbeat] Break ended from web — resuming captures');
+            if (breakStartMs) totalBreakSec += Math.floor((Date.now() - breakStartMs) / 1000);
+            isOnBreak = false;
+            breakStartMs = null;
+            setBreakStatus(false);
+            updateUI();
           }
         } catch (e) {
           console.warn('[Heartbeat] Session poll error:', e.message);
@@ -317,6 +330,7 @@
       breakStartMs = null;
       totalBreakSec = 0;
       captureCount = 0;
+      setBreakStatus(false);
       updateUI();
       syncSessionToMain();
       showToast('Checked out from web dashboard', 'info');
@@ -432,6 +446,7 @@
                 breakStartMs = last.startTime instanceof Date ? last.startTime.getTime() : new Date(last.startTime).getTime();
               }
             }
+            setBreakStatus(isOnBreak);
             startTimer();
             startTracking();
             updateUI();
@@ -450,6 +465,7 @@
           isOnBreak = false;
           totalBreakSec = 0;
           breakStartMs = null;
+          setBreakStatus(false);
           startTimer();
           startTracking();
           updateUI();

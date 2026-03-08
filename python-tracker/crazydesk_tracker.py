@@ -55,7 +55,7 @@ from modules.firebase_api import (
     emergency_check_out,
     update_heartbeat,
 )
-from modules.capture import perform_capture, start_all_tracking, stop_all_tracking, set_countdown_callbacks
+from modules.capture import perform_capture, start_all_tracking, stop_all_tracking, set_countdown_callbacks, set_break_status
 from modules.activity import (
     start_activity_tracking,
     stop_activity_tracking,
@@ -222,6 +222,7 @@ def do_emergency_checkout():
             logger.error("Emergency checkout failed: %s", e)
         session_id = None
         check_in_time_ms = None
+        set_break_status(False)
 
 
 # ── HTTP handler callbacks ─────────────────────────────────────
@@ -269,6 +270,7 @@ def handle_checkin(data: dict) -> dict:
                 if _gui:
                     _gui.update_status("active")
 
+            set_break_status(is_on_break)
             start_tracking()
             logger.info("Resumed existing session: %s", session_id)
             return {"ok": True, "resumed": True, "sessionId": session_id}
@@ -284,6 +286,7 @@ def handle_checkin(data: dict) -> dict:
         break_start_ms = None
         capture_count = 0
 
+        set_break_status(False)
         start_tracking()
         if _gui:
             _gui.update_status("active")
@@ -349,6 +352,7 @@ def handle_checkout(data: dict) -> dict:
         is_on_break = False
         break_start_ms = None
         total_break_sec = 0
+        set_break_status(False)
 
         if _gui:
             _gui.clear_session()
@@ -387,6 +391,7 @@ def handle_break(data: dict) -> dict:
         start_break(session_id, note=note)
         is_on_break = True
         break_start_ms = int(time.time() * 1000)
+        set_break_status(True)
         if _gui:
             _gui.update_status("break")
             _gui.update_session(
@@ -416,6 +421,7 @@ def handle_resume(data: dict) -> dict:
             total_break_sec += int((time.time() * 1000 - break_start_ms) / 1000)
         is_on_break = False
         break_start_ms = None
+        set_break_status(False)
         if _gui:
             _gui.update_status("active")
             _gui.update_session(
@@ -462,6 +468,7 @@ def handle_gui_checkout(report: str, proof_link: str):
         is_on_break = False
         break_start_ms = None
         total_break_sec = 0
+        set_break_status(False)
 
         if _gui:
             _gui.clear_session()

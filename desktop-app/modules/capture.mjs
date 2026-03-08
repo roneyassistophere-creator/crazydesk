@@ -35,6 +35,13 @@ const randomDelay = () =>
 let _captureInProgress = false;
 let _countdownInterval = null;
 
+// ─── Break state — set from renderer when user starts/ends break ──
+let _isOnBreak = false;
+export function setBreakStatus(isOnBreak) {
+  _isOnBreak = isOnBreak;
+  console.log(`[Capture] Break status: ${isOnBreak ? 'ON BREAK — captures paused' : 'active'}`);
+}
+
 function isCaptureInProgress() { return _captureInProgress; }
 
 // ─── Screen capture (via main process IPC) ────────────────────
@@ -309,6 +316,12 @@ function showCountdownAndWait(type) {
 // performCapture — LOCKED: only one capture at a time
 // ═══════════════════════════════════════════════════════════════
 export async function performCapture(type = 'auto') {
+  // ── Guard: skip if user is on break ──
+  if (_isOnBreak) {
+    console.log(`[Capture] Skipping ${type} capture — user is on break`);
+    return { screenshotUrl: null, cameraImageUrl: null, flagged: false, skipped: true, onBreak: true, type };
+  }
+
   // ── Guard: skip if another capture is already running ──
   if (_captureInProgress) {
     console.warn(`[Capture] Skipping ${type} capture — another capture is already in progress`);
@@ -412,6 +425,12 @@ function scheduleNextAuto(delay) {
   console.log(`[Tracker] Next auto-capture in ~${Math.round(delay / 60000)} min`);
   autoTimer = setTimeout(async () => {
     autoTimer = null;
+    // Skip if user is on break — recheck in 5 minutes
+    if (_isOnBreak) {
+      console.log('[Tracker] Auto-capture skipped — user is on break, rechecking in 5 min');
+      scheduleNextAuto(5 * 60_000);
+      return;
+    }
     // Skip if a capture is already running
     if (_captureInProgress) {
       console.log('[Tracker] Auto-capture skipped — another capture in progress, rescheduling');
@@ -522,4 +541,4 @@ export function stopAllTracking() {
   }
 }
 
-export { captureScreen, captureCamera, isCaptureInProgress };
+export { captureScreen, captureCamera, isCaptureInProgress, setBreakStatus };

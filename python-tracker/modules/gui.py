@@ -81,7 +81,9 @@ class TrackerGUI:
         self._status_label: tk.Label | None = None
         self._user_label: tk.Label | None = None
         self._captures_label: tk.Label | None = None
-        self._activity_label: tk.Label | None = None
+        self._activity_label_clicks: tk.Label | None = None
+        self._activity_label_keys: tk.Label | None = None
+        self._stats_frame: tk.Frame | None = None
         self._dot_canvas: tk.Canvas | None = None
         self._conn_label: tk.Label | None = None
         self._checkout_btn: tk.Button | None = None

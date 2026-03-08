@@ -20,14 +20,21 @@ echo.
 
 REM Step 1: Generate icon if not present
 if not exist "assets\icon.ico" (
-    echo [1/3] Generating icon...
+    echo [1/4] Generating icon...
     python generate_icon.py
 ) else (
-    echo [1/3] Icon already exists, skipping.
+    echo [1/4] Icon already exists, skipping.
 )
 
-REM Step 2: Run PyInstaller
-echo [2/3] Building with PyInstaller...
+REM Step 2: Generate version info for Windows metadata
+echo [2/4] Generating version info...
+python version_info.py
+if %ERRORLEVEL% NEQ 0 (
+    echo WARNING: version_info.py failed, building without version info
+)
+
+REM Step 3: Run PyInstaller (UPX disabled to reduce SmartScreen false positives)
+echo [3/4] Building with PyInstaller...
 pyinstaller ^
     --name "CrazyDeskTracker" ^
     --onefile ^
@@ -38,6 +45,8 @@ pyinstaller ^
     --hidden-import "pynput.mouse._win32" ^
     --hidden-import "pystray._win32" ^
     --hidden-import "PIL._tkinter_finder" ^
+    --version-file "file_version_info.txt" ^
+    --noupx ^
     --clean ^
     --noconfirm ^
     crazydesk_tracker.py
@@ -49,13 +58,16 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-REM Step 3: Done
+REM Step 4: Done
 echo.
-echo [3/3] Build complete!
+echo [4/4] Build complete!
 echo.
 echo   Output: dist\CrazyDeskTracker.exe
 echo.
 echo   To run: double-click dist\CrazyDeskTracker.exe
 echo   The tracker will appear in your system tray.
+echo.
+echo   NOTE: Windows SmartScreen may show a warning on first run.
+echo   Click "More info" then "Run anyway" to proceed.
 echo.
 pause
