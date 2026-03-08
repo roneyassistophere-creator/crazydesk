@@ -5,9 +5,10 @@ Screen capture  : mss (works on Windows, macOS, Linux — no prompts)
 Camera capture  : OpenCV (cv2)
 Upload          : Supabase Storage via supabase_upload module
 
-FLOW  — 1. Play notification sound + show "Capturing in 60s" countdown
-         2. At 3, 2, 1 seconds remaining → play sound each second
-         3. At 0s → capture screen + camera → upload → log
+FLOW  — 1. Capture screen instantly
+         2. Play notification sound + show "Camera in 60s" countdown
+         3. At 3, 2, 1 seconds remaining → play sound each second
+         4. At 0s → capture camera → upload both → log
 
 LOCK  — Only ONE capture can run at a time.
 """
@@ -263,12 +264,14 @@ def perform_capture(capture_type: str = "auto") -> dict:
 
         logger.info("=== Starting %s capture for user: %s ===", capture_type, uid)
 
-        # Step 1: Countdown warning
+        # Step 1: Take screenshot instantly
+        screen_bytes = capture_screen()
+
+        # Step 2: Countdown warning before camera capture
         if not _run_countdown(capture_type):
             return {"screenshot_url": None, "camera_url": None, "flagged": False, "skipped": True}
 
-        # Step 2: Capture
-        screen_bytes = capture_screen()
+        # Step 3: Take camera photo after countdown
         camera_bytes = capture_camera()
 
         screenshot_url = None
