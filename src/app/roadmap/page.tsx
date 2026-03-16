@@ -455,10 +455,10 @@ export default function RoadmapPage() {
                             >
                               <div 
                                 onClick={() => { setSelectedMilestone({...milestone, roadmapId: road.id}); setSelectedRoadmap(null); setIsSidebarOpen(true); }}
-                                className="relative flex items-center group cursor-pointer"
+                                className="relative flex items-start group cursor-pointer"
                               >
                                 <div className={`
-                                  absolute left-[-2px] w-4 h-4 rounded-full border-2 z-20 transition-all flex items-center justify-center
+                                  absolute left-[-2px] top-[6px] w-4 h-4 rounded-full border-2 z-20 transition-all flex items-center justify-center
                                   ${milestone.status === 'completed' ? 'bg-success border-success/30' : 'bg-base-100 border-base-300'}
                                   ${milestone.status === 'in-progress' ? 'border-primary ring-4 ring-primary/10' : ''}
                                 `}>
@@ -470,7 +470,7 @@ export default function RoadmapPage() {
                                   ml-8 p-2 rounded-lg border bg-base-100 w-full transition-all text-left
                                   ${selectedMilestone?.id === milestone.id ? 'border-primary shadow-sm' : 'border-transparent group-hover:border-base-300'}
                                 `}>
-                                  <h4 className={`text-[11px] font-bold truncate tracking-tight uppercase ${milestone.status === 'completed' ? 'text-base-content/40' : 'text-base-content'}`}>
+                                  <h4 className={`text-[11px] font-bold leading-[1.2] tracking-tight uppercase ${milestone.status === 'completed' ? 'text-base-content/40' : 'text-base-content'}`}>
                                     {milestone.label}
                                   </h4>
                                 </div>
@@ -479,18 +479,18 @@ export default function RoadmapPage() {
                               {milestone.status !== 'completed' && milestone.checklist.length > 0 && (
                                 <div className="ml-[22px] flex flex-col gap-2 py-2">
                                   {milestone.checklist.map((task) => (
-                                    <div key={task.id} className="relative flex items-center group">
+                                    <div key={task.id} className="relative flex items-start group">
                                       <button 
                                         onClick={(e) => { e.stopPropagation(); toggleSubtask(road.id, milestone.id, task.id); }}
                                         className={`
-                                          absolute left-0 w-3 h-3 rounded border flex items-center justify-center transition-all
+                                          absolute left-0 top-[1px] w-3 h-3 rounded border flex items-center justify-center transition-all
                                           ${task.completed ? 'bg-success border-success' : 'bg-base-100 border-base-300'}
                                         `}
                                       >
                                         {task.completed && <Check className="w-2 h-2 text-success-content" />}
                                       </button>
                                       <div className="ml-6 w-full text-left">
-                                        <span className={`text-[10px] font-medium leading-none transition-colors ${task.completed ? 'text-base-content/30 line-through' : 'text-base-content/50'}`}>
+                                        <span className={`text-[10px] font-medium leading-[1.2] transition-colors ${task.completed ? 'text-base-content/30 line-through' : 'text-base-content/50'}`}>
                                           {task.text || 'Step...'}
                                         </span>
                                       </div>
