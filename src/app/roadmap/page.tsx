@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
+import { doc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase/config';
 import { 
   Globe, User, Smartphone, Bot, CheckCircle2, 
   Plus, X, ChevronRight, ChevronLeft, Trash2,
@@ -37,6 +39,459 @@ interface Roadmap {
   milestones: Milestone[];
 }
 
+const ROADMAPS_LOCAL_KEY = 'crazydesk_roadmaps';
+const ARCHIVED_ROADMAPS_LOCAL_KEY = 'crazydesk_archived_roadmaps';
+const ROADMAPS_BACKUP_LOCAL_KEY = 'crazydesk_roadmaps_backup';
+const ARCHIVED_ROADMAPS_BACKUP_LOCAL_KEY = 'crazydesk_archived_roadmaps_backup';
+const ROADMAPS_INITIAL_BACKUP_LOCAL_KEY = 'crazydesk_roadmaps_backup_initial';
+const ARCHIVED_ROADMAPS_INITIAL_BACKUP_LOCAL_KEY = 'crazydesk_archived_roadmaps_backup_initial';
+const SHARED_ROADMAP_DOC = doc(db, 'shared_data', 'roadmaps_v1');
+
+const getDefaultRoadmaps = (): Roadmap[] => [
+  {
+    id: 'road-website-success',
+    title: 'Website Success',
+    agenda: 'Execution roadmap for website build, SEO growth, lead capture, and expansion.',
+    icon: 'Globe',
+    theme: 'primary',
+    milestones: [
+      {
+        id: 'm-foundation',
+        label: 'Foundation',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Core website setup and base architecture.',
+        checklist: [
+          { id: 'f-1', text: 'Make the admin Dashboard Ready', completed: false },
+          { id: 'f-2', text: 'Make the Client Side Ready', completed: false },
+          { id: 'f-3', text: 'Make Master Template for new pages', completed: false },
+          { id: 'f-4', text: 'Make Template For Location Pages', completed: false },
+          { id: 'f-5', text: 'Make the Final Menu and Their Sub Pages', completed: false },
+          { id: 'f-6', text: 'Make the blogging System', completed: false }
+        ]
+      },
+      {
+        id: 'm-design-aesthetics',
+        label: 'DESIGN & ASTHETICS',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Visual and UX upgrades.',
+        checklist: [
+          { id: 'da-1', text: 'Add smart header', completed: false },
+          { id: 'da-2', text: 'Add smart Footer', completed: false },
+          { id: 'da-3', text: 'Add theme toggle', completed: false },
+          { id: 'da-4', text: 'Light Mode and Dark Mode', completed: false },
+          { id: 'da-5', text: 'Ask Tasin and Rajib For Images', completed: false }
+        ]
+      },
+      {
+        id: 'm-technical-seo',
+        label: 'TECHNICAL SEO',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Tracking, indexing, and performance basics.',
+        checklist: [
+          { id: 'ts-1', text: 'Connect Google Analytics', completed: false },
+          { id: 'ts-2', text: 'Connect Search Console', completed: false },
+          { id: 'ts-3', text: 'Submit Sitemap', completed: false },
+          { id: 'ts-4', text: 'Optimize Speed and Caching', completed: false }
+        ]
+      },
+      {
+        id: 'm-pillar-building',
+        label: 'PILLAR PAGE BUILDING',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Pillar pages, blogs, and keyword mapping workflow.',
+        checklist: [
+          { id: 'pp-1', text: 'Page formats and Framework Decide', completed: false },
+          { id: 'pp-2', text: 'Design All Pilar Pages', completed: false },
+          { id: 'pp-3', text: 'Write 5-10 blogs', completed: false },
+          { id: 'pp-4', text: 'Internal Linking With The pages', completed: false },
+          { id: 'pp-5', text: 'Copy Contents from wordpress', completed: false },
+          { id: 'pp-6', text: 'Add Trust Pilot Reviews', completed: false },
+          { id: 'pp-7', text: 'Add Pillar page for digital Services to services', completed: false },
+          { id: 'pp-8', text: 'Map the keywords while designing', completed: false }
+        ]
+      },
+      {
+        id: 'm-offers-cta',
+        label: 'OFFERS, CTA & LEAD CAPTURES',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Conversion and lead generation system.',
+        checklist: [
+          { id: 'oc-1', text: 'Design Pricing Packages', completed: false },
+          { id: 'oc-2', text: 'Design Clear Messages', completed: false },
+          { id: 'oc-3', text: 'Add Estimation Calculator with CMS', completed: false },
+          { id: 'oc-4', text: 'Downloadable Resources with CMS', completed: false },
+          { id: 'oc-5', text: 'Contact Forms with CMS', completed: false },
+          { id: 'oc-6', text: 'Get Quote with CMS', completed: false },
+          { id: 'oc-7', text: 'Add enough CTA for Calling and Whatsapp', completed: false },
+          { id: 'oc-8', text: 'Add a live chat , starts with email, says no one available', completed: false },
+          { id: 'oc-9', text: 'Newsletter subscription option with CMS', completed: false },
+          { id: 'oc-10', text: 'Roi Calculator', completed: false },
+          { id: 'oc-11', text: 'Add a pop up for regular tips and tricks', completed: false }
+        ]
+      },
+      {
+        id: 'm-build-subpages',
+        label: 'BUILD SUB PAGES',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Scalable page creation with SEO-first structure.',
+        checklist: [
+          { id: 'bs-1', text: 'Design Services Subpages', completed: false },
+          { id: 'bs-2', text: 'Design Location subpages (one template)', completed: false },
+          { id: 'bs-3', text: 'Design Footer Sub Pages', completed: false },
+          { id: 'bs-4', text: 'Make Sure things are SEO optimized while designing', completed: false }
+        ]
+      },
+      {
+        id: 'm-onpage-seo',
+        label: 'ON PAGE SEO',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Content and metadata quality standards.',
+        checklist: [
+          { id: 'op-1', text: 'Meta Title Meta description', completed: false },
+          { id: 'op-2', text: 'Image tags are all good', completed: false },
+          { id: 'op-3', text: 'Internal and External linking', completed: false },
+          { id: 'op-4', text: 'EEAT maintained', completed: false },
+          { id: 'op-5', text: 'Topic Authority dominated', completed: false }
+        ]
+      },
+      {
+        id: 'm-backlink-building',
+        label: 'Backlink Building',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Authority and outreach execution.',
+        checklist: [
+          { id: 'bb-1', text: 'Create Social Accounts', completed: false },
+          { id: 'bb-2', text: 'Get latest High DA accounts', completed: false },
+          { id: 'bb-3', text: 'Guest Posting to forums and other platforms', completed: false },
+          { id: 'bb-4', text: 'Outreach For Backlinks from compititors', completed: false },
+          { id: 'bb-5', text: 'HARO and COMMUNITY outreach', completed: false },
+          { id: 'bb-6', text: 'Step...', completed: false }
+        ]
+      },
+      {
+        id: 'm-ai-visibility',
+        label: 'AI VISIBILITY OPT.',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'AI discoverability and AI-search targeting.',
+        checklist: [
+          { id: 'ai-1', text: 'Make sure AI can crawl', completed: false },
+          { id: 'ai-2', text: 'Ai friendly contents are added', completed: false },
+          { id: 'ai-3', text: 'Ai friendly Long tails are targeted', completed: false }
+        ]
+      },
+      {
+        id: 'm-expansion',
+        label: 'EXPANSION',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'New roadmap branches and service expansion.',
+        checklist: [
+          { id: 'ex-1', text: 'Add connected pages', completed: false },
+          { id: 'ex-2', text: 'Designing the Airbnb Roadmap pages', completed: false },
+          { id: 'ex-3', text: 'Design the learning flow for entering Airbnb', completed: false },
+          { id: 'ex-4', text: 'Provide resources and information through pages and blogs', completed: false },
+          { id: 'ex-5', text: 'Add service cards and create pages for each.', completed: false }
+        ]
+      },
+      {
+        id: 'm-final-audit',
+        label: 'FINAL WEBSITE AUDIT and REVIEW',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Final verification and quality review before scale.',
+        checklist: []
+      }
+    ]
+  },
+  {
+    id: 'road-rafin-branding',
+    title: 'RAFIN - BRANDING',
+    agenda: 'Brand visibility and personal content engine for outreach.',
+    icon: 'Sparkles',
+    theme: 'secondary',
+    milestones: [
+      {
+        id: 'rb-warm-up',
+        label: 'WARM UP',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Initial content and audience warmup activities.',
+        checklist: [
+          { id: 'rb-1', text: 'Create Dedicated Tiktok, Facebook, Insta and Youtube.', completed: false },
+          { id: 'rb-2', text: 'Create a very basic 30 seconds of talking video about morning coffee and a little walk around your area talking about starting the day and post it to all these platforms.', completed: false },
+          { id: 'rb-3', text: 'Create a video talking about a bad day seeing your property after the guests left.', completed: false },
+          { id: 'rb-4', text: 'Create a 40 second video on your Airbnb property inspection after a guest left.', completed: false },
+          { id: 'rb-5', text: 'Create a 25 sec video: ask for suggestions about any of your airbnb concerns like what would you do in this situation as a airbnb host?', completed: false },
+          { id: 'rb-6', text: 'Capture 10 pictures for sharing to stories.', completed: false }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'road-contents-assistosphere',
+    title: 'CONTENTS - ASSISTOPHERE',
+    agenda: 'Content funnel for authority and lead conversion.',
+    icon: 'BookOpen',
+    theme: 'accent',
+    milestones: [
+      {
+        id: 'ca-foundation',
+        label: 'FOUNDATION',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Core intro and educational video sequence.',
+        checklist: [
+          { id: 'ca-f-1', text: 'Create a short video about team intro, each member comes up and tells i do this to solve your this.', completed: false },
+          { id: 'ca-f-2', text: 'Create a funny reels about each team member showcasing who is like which animal.', completed: false },
+          { id: 'ca-f-3', text: 'A welcome video that explains assistophere: How X is airbnb host, faced this this problems, about to quit airbnb, assistophere comes in to solve all their problems and get things up and ready again.', completed: false },
+          { id: 'ca-f-4', text: 'Create 15 photos for sharing to story. Premade.', completed: false }
+        ]
+      },
+      {
+        id: 'ca-middle-funnel',
+        label: 'MIDDLE FUNNEL',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Comparison, proof, and hook-based content.',
+        checklist: [
+          { id: 'ca-m-1', text: 'Compare 4 good and bad listing in 40 seconds. 5 key points.', completed: false },
+          { id: 'ca-m-2', text: 'Share 3 results that you got by doing specific 5 things to the listing.', completed: false },
+          { id: 'ca-m-3', text: 'Hook: Can you imagine getting a 1 year long booking on my clients property, litterally hassle free year.', completed: false },
+          { id: 'ca-m-4', text: 'To make your airbnb business profitable you need 3 things: For our comprehensive guide dm or comment', completed: false },
+          { id: 'ca-m-5', text: 'Why fast reply is the key to success.', completed: false }
+        ]
+      },
+      {
+        id: 'ca-bottom-funnel',
+        label: 'BOTTOM FUNNEL',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Direct conversion-focused offers and calls.',
+        checklist: [
+          { id: 'ca-b-1', text: 'You just need a 5 page guide to make your airbnb profitable. Collect Emails in exchange of data.', completed: false },
+          { id: 'ca-b-2', text: 'Promote a live webinar about pricing optimization.', completed: false },
+          { id: 'ca-b-3', text: 'Direct call to action video saying if you need someone to manage your airbnb just call us.', completed: false }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'road-community-reach',
+    title: 'COMMUNITY REACH',
+    agenda: 'Community participation and trust-building channels.',
+    icon: 'User',
+    theme: 'info',
+    milestones: [
+      {
+        id: 'cr-follow-ups',
+        label: 'FOLLOW UPS',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Presence in groups and forums.',
+        checklist: [
+          { id: 'cr-f-1', text: 'Join whatsapp groups', completed: false },
+          { id: 'cr-f-2', text: 'Join related facebook groups', completed: false },
+          { id: 'cr-f-3', text: 'Join 3 very active forums', completed: false }
+        ]
+      },
+      {
+        id: 'cr-social-connection',
+        label: 'SOCIAL CONNECTION',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Add and connect with target hosts.',
+        checklist: [
+          { id: 'cr-s-1', text: 'Find 5 new hosts on tiktok', completed: false },
+          { id: 'cr-s-2', text: 'Find 5 new Hosts On Linked In', completed: false },
+          { id: 'cr-s-3', text: 'Find 5 new Hosts On Facebook', completed: false }
+        ]
+      },
+      {
+        id: 'cr-marketplace',
+        label: 'MARKETPLACE',
+        status: 'todo',
+        priority: 'Low',
+        dueDate: '',
+        desc: 'Marketplace profile and listing channels.',
+        checklist: [
+          { id: 'cr-m-1', text: 'Fiver', completed: false },
+          { id: 'cr-m-2', text: 'Upwork', completed: false },
+          { id: 'cr-m-3', text: 'Freelancer.com', completed: false },
+          { id: 'cr-m-4', text: 'Bruntwork', completed: false }
+        ]
+      },
+      {
+        id: 'cr-rajib-roney-branding',
+        label: 'RAJIB/RONEY BRANDING',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Personal branding videos and profile touch-ups.',
+        checklist: [
+          { id: 'cr-r-1', text: 'Personal profiles will have a property touch ups', completed: false },
+          { id: 'cr-r-2', text: 'Make simple videos related to things we do', completed: false },
+          { id: 'cr-r-3', text: 'Make sure when we use personal profiles to talk to someone its appears legit and related', completed: false }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'road-email-marketing',
+    title: 'EMAIL MARKETING',
+    agenda: 'Lead hunting, offer messaging, and email automation.',
+    icon: 'Smartphone',
+    theme: 'secondary',
+    milestones: [
+      {
+        id: 'em-lead-generation',
+        label: 'LEAD GENERATION',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Lead source setup and outbound readiness.',
+        checklist: [
+          { id: 'em-l-1', text: 'Setup a lead hunting page for preparing lead sheet. so no emails repeats.', completed: false },
+          { id: 'em-l-2', text: 'Find emails from UK company directory', completed: false },
+          { id: 'em-l-3', text: 'Find properties from google maps and collect contacts', completed: false },
+          { id: 'em-l-4', text: 'Find an way to scrap data from airbnb via apify', completed: false },
+          { id: 'em-l-5', text: 'Try out fiver guys for bulk data and send nail', completed: false },
+          { id: 'em-l-6', text: 'Run video Ads to get emails or numbers or dms', completed: false },
+          { id: 'em-l-7', text: 'A video saying, get unlimited direct bookings, then fills up a form to check if he can get direct bookings from us.', completed: false }
+        ]
+      },
+      {
+        id: 'em-offer-message',
+        label: 'OFFER - MESSAGE',
+        status: 'todo',
+        priority: 'High',
+        dueDate: '',
+        desc: 'Offer structure and response messaging.',
+        checklist: [
+          { id: 'em-o-1', text: 'Design the initial message', completed: false },
+          { id: 'em-o-2', text: 'Design the offer: full airbnb mngmnt , less then a cleaning fee', completed: false },
+          { id: 'em-o-3', text: 'Follow up strategy replys', completed: false },
+          { id: 'em-o-4', text: 'Design a email template with signature and proof', completed: false }
+        ]
+      },
+      {
+        id: 'em-automation',
+        label: 'EMAIL AUTOMATION',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Automation stack for follow-up and nurturing.',
+        checklist: [
+          { id: 'em-a-1', text: 'buy required domain', completed: false },
+          { id: 'em-a-2', text: 'setup mailchimp or other platform', completed: false },
+          { id: 'em-a-3', text: 'use lead sheet to email and follow up', completed: false },
+          { id: 'em-a-4', text: 'use ai in further automation', completed: false }
+        ]
+      },
+      {
+        id: 'em-personal-emails',
+        label: 'PERSONAL EMAILS',
+        status: 'todo',
+        priority: 'Medium',
+        dueDate: '',
+        desc: 'Personalized campaign for higher response rate.',
+        checklist: [
+          { id: 'em-p-1', text: 'Setup a personal email campaign', completed: false },
+          { id: 'em-p-2', text: 'Inbox people personaly for managing their properties. Higher response rate', completed: false }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'road-systemization',
+    title: 'SYSTEMIZATION',
+    agenda: 'Operations, accountability, documentation, and automation framework.',
+    icon: 'Settings2',
+    theme: 'neutral',
+    milestones: [
+      { id: 'sy-foundation', label: 'FOUNDATION', status: 'todo', priority: 'High', dueDate: '', desc: 'System foundation.', checklist: [] },
+      { id: 'sy-team-management', label: 'TEAM MANAGEMENT', status: 'todo', priority: 'High', dueDate: '', desc: 'Team operations structure.', checklist: [] },
+      { id: 'sy-client-satisfaction', label: 'CLIENT SATISFACTION', status: 'todo', priority: 'High', dueDate: '', desc: 'Client outcome checks.', checklist: [] },
+      { id: 'sy-team-efficiency', label: 'TEAM EFFICIENCY', status: 'todo', priority: 'Medium', dueDate: '', desc: 'Execution efficiency improvements.', checklist: [] },
+      { id: 'sy-ensure-task', label: 'ENSURE TASK COMPLITION', status: 'todo', priority: 'High', dueDate: '', desc: 'Task completion controls.', checklist: [] },
+      { id: 'sy-accountability', label: 'ACCOUNTABILITY & REPORTING', status: 'todo', priority: 'High', dueDate: '', desc: 'Reporting and ownership.', checklist: [] },
+      { id: 'sy-documentation', label: 'DOCUMENTATION', status: 'todo', priority: 'Medium', dueDate: '', desc: 'Documentation system.', checklist: [] },
+      { id: 'sy-knowledge-base', label: 'KNOWLEDGE BASE', status: 'todo', priority: 'Medium', dueDate: '', desc: 'Knowledge repository.', checklist: [] },
+      { id: 'sy-recruitment', label: 'RECRUITMENT AND TRAINNING DOCS', status: 'todo', priority: 'Medium', dueDate: '', desc: 'Hiring and training docs.', checklist: [] },
+      { id: 'sy-cutting', label: 'CUTTING OF THINGS', status: 'todo', priority: 'Low', dueDate: '', desc: 'Remove unnecessary process overhead.', checklist: [] },
+      { id: 'sy-task-automation', label: 'TASK AUTOMATION', status: 'todo', priority: 'Medium', dueDate: '', desc: 'Automate repetitive tasks.', checklist: [] },
+      { id: 'sy-ai-integration', label: 'AI INTEGRATION', status: 'todo', priority: 'Medium', dueDate: '', desc: 'AI augmentation in workflows.', checklist: [] }
+    ]
+  }
+];
+
+const parseRoadmaps = (raw: string | null): Roadmap[] => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const readLegacyLocalRoadmaps = () => {
+  if (typeof window === 'undefined') {
+    return { roadmaps: [] as Roadmap[], archivedRoadmaps: [] as Roadmap[] };
+  }
+
+  const active = parseRoadmaps(localStorage.getItem(ROADMAPS_LOCAL_KEY));
+  const archived = parseRoadmaps(localStorage.getItem(ARCHIVED_ROADMAPS_LOCAL_KEY));
+
+  return { roadmaps: active, archivedRoadmaps: archived };
+};
+
+const persistLocalBackup = (roadmaps: Roadmap[], archivedRoadmaps: Roadmap[]) => {
+  if (typeof window === 'undefined') return;
+
+  localStorage.setItem(ROADMAPS_BACKUP_LOCAL_KEY, JSON.stringify(roadmaps));
+  localStorage.setItem(ARCHIVED_ROADMAPS_BACKUP_LOCAL_KEY, JSON.stringify(archivedRoadmaps));
+  localStorage.setItem(ROADMAPS_LOCAL_KEY, JSON.stringify(roadmaps));
+  localStorage.setItem(ARCHIVED_ROADMAPS_LOCAL_KEY, JSON.stringify(archivedRoadmaps));
+};
+
+const persistInitialLocalBackup = (roadmaps: Roadmap[], archivedRoadmaps: Roadmap[]) => {
+  if (typeof window === 'undefined') return;
+
+  if (!localStorage.getItem(ROADMAPS_INITIAL_BACKUP_LOCAL_KEY)) {
+    localStorage.setItem(ROADMAPS_INITIAL_BACKUP_LOCAL_KEY, JSON.stringify(roadmaps));
+  }
+
+  if (!localStorage.getItem(ARCHIVED_ROADMAPS_INITIAL_BACKUP_LOCAL_KEY)) {
+    localStorage.setItem(ARCHIVED_ROADMAPS_INITIAL_BACKUP_LOCAL_KEY, JSON.stringify(archivedRoadmaps));
+  }
+};
+
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = { Globe, User, Smartphone, Bot, Layout, Settings2, Target, Sparkles, BookOpen, Map };
 
 const getIcon = (name: string) => {
@@ -45,50 +500,12 @@ const getIcon = (name: string) => {
 };
 
 export default function RoadmapPage() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const router = useRouter();
-
-  // Role gate: redirect non-admin/manager
-  useEffect(() => {
-    if (profile && profile.role !== 'ADMIN' && profile.role !== 'MANAGER') {
-      router.push('/dashboard');
-    }
-  }, [profile, router]);
-
-  const [roadmaps, setRoadmaps] = useState<Roadmap[]>(() => {
-    if (typeof window === 'undefined') return [];
-    const saved = localStorage.getItem('crazydesk_roadmaps');
-    return saved ? JSON.parse(saved) : [
-      {
-        id: 'road-1',
-        title: 'Website Success Path',
-        agenda: 'To build a high-converting, SEO-optimized platform.',
-        icon: 'Globe',
-        theme: 'primary',
-        milestones: [
-          { 
-            id: 'm1', 
-            label: 'Foundation', 
-            status: 'completed' as const, 
-            priority: 'High',
-            dueDate: '2024-12-01',
-            desc: 'Primary site architecture and Next.js setup.',
-            checklist: [
-              { id: 's1', text: 'Initialize Repo', completed: true },
-              { id: 's2', text: 'Setup Tailwind', completed: true },
-              { id: 's3', text: 'Deployment Pipeline', completed: true }
-            ]
-          }
-        ]
-      }
-    ];
-  });
-
-  const [archivedRoadmaps, setArchivedRoadmaps] = useState<Roadmap[]>(() => {
-    if (typeof window === 'undefined') return [];
-    const saved = localStorage.getItem('crazydesk_archived_roadmaps');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [roadmaps, setRoadmaps] = useState<Roadmap[]>([]);
+  const [archivedRoadmaps, setArchivedRoadmaps] = useState<Roadmap[]>([]);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const latestSyncedPayloadRef = useRef('');
 
   const [viewMode, setViewMode] = useState<'active' | 'completed'>('active');
   const [searchQuery, setSearchQuery] = useState('');
@@ -99,9 +516,131 @@ export default function RoadmapPage() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    localStorage.setItem('crazydesk_roadmaps', JSON.stringify(roadmaps));
-    localStorage.setItem('crazydesk_archived_roadmaps', JSON.stringify(archivedRoadmaps));
-  }, [roadmaps, archivedRoadmaps]);
+    if (profile && profile.role !== 'ADMIN' && profile.role !== 'MANAGER') {
+      router.push('/dashboard');
+    }
+  }, [profile, router]);
+
+  useEffect(() => {
+    if (!user || !profile || (profile.role !== 'ADMIN' && profile.role !== 'MANAGER')) {
+      setRoadmaps([]);
+      setArchivedRoadmaps([]);
+      setIsHydrated(false);
+      latestSyncedPayloadRef.current = '';
+      return;
+    }
+
+    const legacyStateAtLogin = readLegacyLocalRoadmaps();
+    persistInitialLocalBackup(legacyStateAtLogin.roadmaps, legacyStateAtLogin.archivedRoadmaps);
+
+    const unsubscribe = onSnapshot(SHARED_ROADMAP_DOC, async (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        const nextRoadmaps = Array.isArray(data.roadmaps) ? (data.roadmaps as Roadmap[]) : [];
+        const nextArchivedRoadmaps = Array.isArray(data.archivedRoadmaps) ? (data.archivedRoadmaps as Roadmap[]) : [];
+
+        const templateRoadmaps = getDefaultRoadmaps();
+        const existingRoadmapIds = new Set(nextRoadmaps.map((roadmap) => roadmap.id));
+        const missingTemplateRoadmaps = templateRoadmaps.filter((roadmap) => !existingRoadmapIds.has(roadmap.id));
+
+        if (missingTemplateRoadmaps.length > 0 && (nextRoadmaps.length > 0 || nextArchivedRoadmaps.length > 0)) {
+          const mergedRoadmaps = [...nextRoadmaps, ...missingTemplateRoadmaps];
+          const mergedPayload = JSON.stringify({ roadmaps: mergedRoadmaps, archivedRoadmaps: nextArchivedRoadmaps });
+          latestSyncedPayloadRef.current = mergedPayload;
+
+          setRoadmaps(mergedRoadmaps);
+          setArchivedRoadmaps(nextArchivedRoadmaps);
+          persistLocalBackup(mergedRoadmaps, nextArchivedRoadmaps);
+          setIsHydrated(true);
+
+          await setDoc(SHARED_ROADMAP_DOC, {
+            roadmaps: mergedRoadmaps,
+            archivedRoadmaps: nextArchivedRoadmaps,
+            templateSyncedAt: serverTimestamp(),
+            templateSyncedBy: user.uid,
+            updatedAt: serverTimestamp(),
+            updatedBy: user.uid
+          }, { merge: true });
+          return;
+        }
+
+        if (nextRoadmaps.length === 0 && nextArchivedRoadmaps.length === 0) {
+          const seededRoadmaps = getDefaultRoadmaps();
+          const seededArchivedRoadmaps: Roadmap[] = [];
+          const seededPayload = JSON.stringify({ roadmaps: seededRoadmaps, archivedRoadmaps: seededArchivedRoadmaps });
+          latestSyncedPayloadRef.current = seededPayload;
+
+          setRoadmaps(seededRoadmaps);
+          setArchivedRoadmaps(seededArchivedRoadmaps);
+          persistLocalBackup(seededRoadmaps, seededArchivedRoadmaps);
+          setIsHydrated(true);
+
+          await setDoc(SHARED_ROADMAP_DOC, {
+            roadmaps: seededRoadmaps,
+            archivedRoadmaps: seededArchivedRoadmaps,
+            seededAt: serverTimestamp(),
+            seededBy: user.uid,
+            updatedAt: serverTimestamp(),
+            updatedBy: user.uid
+          }, { merge: true });
+          return;
+        }
+
+        const payload = JSON.stringify({ roadmaps: nextRoadmaps, archivedRoadmaps: nextArchivedRoadmaps });
+        latestSyncedPayloadRef.current = payload;
+
+        setRoadmaps(nextRoadmaps);
+        setArchivedRoadmaps(nextArchivedRoadmaps);
+        persistLocalBackup(nextRoadmaps, nextArchivedRoadmaps);
+        setIsHydrated(true);
+        return;
+      }
+
+      const localState = readLegacyLocalRoadmaps();
+      const initialRoadmaps = localState.roadmaps.length > 0 ? localState.roadmaps : getDefaultRoadmaps();
+      const initialArchivedRoadmaps = localState.archivedRoadmaps;
+      const payload = JSON.stringify({ roadmaps: initialRoadmaps, archivedRoadmaps: initialArchivedRoadmaps });
+      latestSyncedPayloadRef.current = payload;
+
+      setRoadmaps(initialRoadmaps);
+      setArchivedRoadmaps(initialArchivedRoadmaps);
+      persistLocalBackup(initialRoadmaps, initialArchivedRoadmaps);
+      setIsHydrated(true);
+
+      await setDoc(SHARED_ROADMAP_DOC, {
+        roadmaps: initialRoadmaps,
+        archivedRoadmaps: initialArchivedRoadmaps,
+        migratedAt: serverTimestamp(),
+        migratedBy: user.uid,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.uid
+      }, { merge: true });
+    });
+
+    return () => unsubscribe();
+  }, [profile, user]);
+
+  useEffect(() => {
+    if (!user || !isHydrated) return;
+
+    persistLocalBackup(roadmaps, archivedRoadmaps);
+    const payload = JSON.stringify({ roadmaps, archivedRoadmaps });
+
+    if (payload === latestSyncedPayloadRef.current) {
+      return;
+    }
+
+    latestSyncedPayloadRef.current = payload;
+    setDoc(SHARED_ROADMAP_DOC, {
+      roadmaps,
+      archivedRoadmaps,
+      updatedAt: serverTimestamp(),
+      updatedBy: user.uid
+    }, { merge: true }).catch((error) => {
+      console.error('Failed to sync roadmap to Firestore:', error);
+      latestSyncedPayloadRef.current = '';
+    });
+  }, [roadmaps, archivedRoadmaps, isHydrated, user]);
 
   const scroll = (direction: 'left' | 'right') => {
     if (scrollContainerRef.current) {

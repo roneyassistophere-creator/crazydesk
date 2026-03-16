@@ -82,6 +82,11 @@ service cloud.firestore {
       allow read, write: if isAuthenticated();
     }
 
+    // Shared workspace data (cross-device, non-user-specific)
+    match /shared_data/{docId} {
+      allow read, write: if docId == 'roadmaps_v1' && isManagerOrAdmin();
+    }
+
     // Activity Logs (for Web Tracker - mouse movements, clicks, keystrokes)
     match /activity_logs/{logId} {
       // Users can read their own activity logs, Admins/Managers can read all
