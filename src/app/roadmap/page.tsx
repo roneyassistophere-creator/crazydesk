@@ -39,6 +39,58 @@ interface Roadmap {
   milestones: Milestone[];
 }
 
+const normalizeChecklist = (value: unknown): SubTask[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item, index) => {
+      const source = item as Partial<SubTask>;
+      return {
+        id: source.id ?? `st-${index + 1}`,
+        text: typeof source.text === 'string' ? source.text : '',
+        completed: !!source.completed
+      };
+    })
+    .filter((item) => item.text.trim().length > 0 || item.completed);
+};
+
+const normalizeMilestones = (value: unknown): Milestone[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((item, index) => {
+    const source = item as Partial<Milestone>;
+    const status = source.status === 'completed' || source.status === 'in-progress' || source.status === 'todo'
+      ? source.status
+      : 'todo';
+
+    return {
+      id: typeof source.id === 'string' ? source.id : `m-${index + 1}`,
+      label: typeof source.label === 'string' ? source.label : 'New Point',
+      status,
+      priority: typeof source.priority === 'string' ? source.priority : 'Medium',
+      dueDate: typeof source.dueDate === 'string' ? source.dueDate : '',
+      desc: typeof source.desc === 'string' ? source.desc : '',
+      checklist: normalizeChecklist(source.checklist)
+    };
+  });
+};
+
+const normalizeRoadmaps = (value: unknown): Roadmap[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((item, index) => {
+    const source = item as Partial<Roadmap>;
+    return {
+      id: typeof source.id === 'string' ? source.id : `road-${index + 1}`,
+      title: typeof source.title === 'string' ? source.title : 'Untitled Path',
+      agenda: typeof source.agenda === 'string' ? source.agenda : '',
+      icon: typeof source.icon === 'string' ? source.icon : 'Target',
+      theme: typeof source.theme === 'string' ? source.theme : 'primary',
+      milestones: normalizeMilestones(source.milestones)
+    };
+  });
+};
+
 const ROADMAPS_LOCAL_KEY = 'crazydesk_roadmaps';
 const ARCHIVED_ROADMAPS_LOCAL_KEY = 'crazydesk_archived_roadmaps';
 const ROADMAPS_BACKUP_LOCAL_KEY = 'crazydesk_roadmaps_backup';
@@ -454,7 +506,7 @@ const parseRoadmaps = (raw: string | null): Roadmap[] => {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeRoadmaps(parsed);
   } catch {
     return [];
   }
@@ -536,8 +588,8 @@ export default function RoadmapPage() {
     const unsubscribe = onSnapshot(SHARED_ROADMAP_DOC, async (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        const nextRoadmaps = Array.isArray(data.roadmaps) ? (data.roadmaps as Roadmap[]) : [];
-        const nextArchivedRoadmaps = Array.isArray(data.archivedRoadmaps) ? (data.archivedRoadmaps as Roadmap[]) : [];
+        const nextRoadmaps = normalizeRoadmaps(data.roadmaps);
+        const nextArchivedRoadmaps = normalizeRoadmaps(data.archivedRoadmaps);
 
         const templateRoadmaps = getDefaultRoadmaps();
         const existingRoadmapIds = new Set(nextRoadmaps.map((roadmap) => roadmap.id));
@@ -721,7 +773,7 @@ export default function RoadmapPage() {
     const currentList = viewMode === 'active' ? roadmaps : archivedRoadmaps;
 
     updateFunc(currentList.map(road => 
-      road.id === roadmapId ? { ...road, milestones: [...road.milestones, newMilestone] } : road
+      road.id === roadmapId ? { ...road, milestones: [...normalizeMilestones(road.milestones), newMilestone] } : road
     ));
     setSelectedMilestone({ ...newMilestone, roadmapId });
     setSelectedRoadmap(null);
