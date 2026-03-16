@@ -9,6 +9,7 @@ import {
   Layout, Target, Flag, Settings2, Check, Search, 
   Archive, RotateCcw, BookOpen, Sparkles, Map
 } from 'lucide-react';
+import ConfirmationModal from '@/components/common/ConfirmationModal';
 
 interface SubTask {
   id: string | number;
@@ -94,6 +95,7 @@ export default function RoadmapPage() {
   const [selectedMilestone, setSelectedMilestone] = useState<(Milestone & { roadmapId: string }) | null>(null);
   const [selectedRoadmap, setSelectedRoadmap] = useState<Roadmap | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string; type: 'roadmap' | 'milestone'; roadmapId?: string } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -132,6 +134,19 @@ export default function RoadmapPage() {
       setArchivedRoadmaps(archivedRoadmaps.filter(r => r.id !== id));
     }
     if (selectedRoadmap?.id === id) setIsSidebarOpen(false);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteConfirm) return;
+    if (deleteConfirm.type === 'roadmap') {
+      deleteRoadmap(deleteConfirm.id);
+    } else {
+      const deleteFunc = viewMode === 'active' ? setRoadmaps : setArchivedRoadmaps;
+      const currentList = viewMode === 'active' ? roadmaps : archivedRoadmaps;
+      deleteFunc(currentList.map(road => road.id === deleteConfirm.roadmapId ? { ...road, milestones: road.milestones.filter(m => m.id !== deleteConfirm.id) } : road));
+      setIsSidebarOpen(false);
+    }
+    setDeleteConfirm(null);
   };
 
   const archiveRoadmap = (id: string) => {
@@ -372,7 +387,7 @@ export default function RoadmapPage() {
                             </button>
                           )}
                           <button 
-                            onClick={(e) => { e.stopPropagation(); deleteRoadmap(road.id); }}
+                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm({ id: road.id, title: road.title, type: 'roadmap' }); }}
                             className="p-1 text-base-content/30 hover:text-error transition-colors"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -678,12 +693,7 @@ export default function RoadmapPage() {
 
             <footer className="pt-6 border-t border-base-300 flex justify-between">
               <button 
-                onClick={() => {
-                  const deleteFunc = viewMode === 'active' ? setRoadmaps : setArchivedRoadmaps;
-                  const currentList = viewMode === 'active' ? roadmaps : archivedRoadmaps;
-                  deleteFunc(currentList.map(road => road.id === selectedMilestone.roadmapId ? {...road, milestones: road.milestones.filter(m => m.id !== selectedMilestone.id)} : road));
-                  setIsSidebarOpen(false);
-                }}
+                onClick={() => setDeleteConfirm({ id: selectedMilestone.id, title: selectedMilestone.label, type: 'milestone', roadmapId: selectedMilestone.roadmapId })}
                 className="btn btn-ghost btn-sm text-error"
               >
                 <Trash2 className="w-4 h-4" />
@@ -703,6 +713,17 @@ export default function RoadmapPage() {
           onClick={() => setIsSidebarOpen(false)} 
         />
       )}
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        onConfirm={confirmDelete}
+        title={deleteConfirm?.type === 'roadmap' ? 'Delete Roadmap' : 'Delete Milestone'}
+        message={`"${deleteConfirm?.title || ''}" and all its ${deleteConfirm?.type === 'roadmap' ? 'milestones' : 'checklist items'} will be permanently removed. This action cannot be undone.`}
+        confirmLabel="Delete"
+        variant="danger"
+      />
     </div>
   );
 }
