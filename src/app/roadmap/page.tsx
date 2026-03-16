@@ -675,8 +675,11 @@ export default function RoadmapPage() {
   useEffect(() => {
     if (!user || !isHydrated) return;
 
-    persistLocalBackup(roadmaps, archivedRoadmaps);
-    const payload = JSON.stringify({ roadmaps, archivedRoadmaps });
+    const syncRoadmaps = normalizeRoadmaps(roadmaps);
+    const syncArchivedRoadmaps = normalizeRoadmaps(archivedRoadmaps);
+
+    persistLocalBackup(syncRoadmaps, syncArchivedRoadmaps);
+    const payload = JSON.stringify({ roadmaps: syncRoadmaps, archivedRoadmaps: syncArchivedRoadmaps });
 
     if (payload === latestSyncedPayloadRef.current) {
       return;
@@ -684,8 +687,8 @@ export default function RoadmapPage() {
 
     latestSyncedPayloadRef.current = payload;
     setDoc(SHARED_ROADMAP_DOC, {
-      roadmaps,
-      archivedRoadmaps,
+      roadmaps: syncRoadmaps,
+      archivedRoadmaps: syncArchivedRoadmaps,
       updatedAt: serverTimestamp(),
       updatedBy: user.uid
     }, { merge: true }).catch((error) => {
@@ -783,11 +786,16 @@ export default function RoadmapPage() {
   const updateMilestone = (updated: Milestone & { roadmapId: string }) => {
     const updateFunc = viewMode === 'active' ? setRoadmaps : setArchivedRoadmaps;
     const currentList = viewMode === 'active' ? roadmaps : archivedRoadmaps;
+    const { roadmapId, ...milestoneToPersist } = updated;
 
-    updateFunc(currentList.map(road => ({
-      ...road,
-      milestones: road.milestones.map(m => m.id === updated.id ? { ...updated, roadmapId: undefined } as Milestone : m)
-    })));
+    updateFunc(currentList.map(road => (
+      road.id !== roadmapId
+        ? road
+        : {
+            ...road,
+            milestones: road.milestones.map(m => m.id === updated.id ? milestoneToPersist : m)
+          }
+    )));
   };
 
   const toggleSubtask = (roadmapId: string, milestoneId: string, subtaskId: string | number) => {
