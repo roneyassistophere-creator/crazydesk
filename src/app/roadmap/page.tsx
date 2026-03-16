@@ -479,18 +479,18 @@ export default function RoadmapPage() {
                               {milestone.status !== 'completed' && milestone.checklist.length > 0 && (
                                 <div className="ml-[22px] flex flex-col gap-2 py-2">
                                   {milestone.checklist.map((task) => (
-                                    <div key={task.id} className="relative flex items-start group">
+                                    <div key={task.id} className="flex items-start gap-3 group">
                                       <button 
                                         onClick={(e) => { e.stopPropagation(); toggleSubtask(road.id, milestone.id, task.id); }}
                                         className={`
-                                          absolute left-0 top-[1px] w-3 h-3 rounded border flex items-center justify-center transition-all
+                                          shrink-0 w-3 h-3 rounded border flex items-center justify-center transition-all mt-[0.5px]
                                           ${task.completed ? 'bg-success border-success' : 'bg-base-100 border-base-300'}
                                         `}
                                       >
                                         {task.completed && <Check className="w-2 h-2 text-success-content" />}
                                       </button>
-                                      <div className="ml-6 w-full text-left">
-                                        <span className={`text-[10px] font-medium leading-[1.2] transition-colors ${task.completed ? 'text-base-content/30 line-through' : 'text-base-content/50'}`}>
+                                      <div className="flex-1 text-left">
+                                        <span className={`block text-[10px] font-medium leading-[13px] transition-colors ${task.completed ? 'text-base-content/30 line-through' : 'text-base-content/50'}`}>
                                           {task.text || 'Step...'}
                                         </span>
                                       </div>
