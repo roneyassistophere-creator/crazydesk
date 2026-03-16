@@ -7,7 +7,7 @@ import {
   CheckSquare,
   Users,
   BarChart,
-  FolderOpen,
+  Map,
   Wrench,
   LogOut,
   UserCircle,
@@ -27,7 +27,7 @@ const menuItems = [
   { name: 'Task Manager', icon: CheckSquare, href: '/tasks' },
   { name: 'Team Availability', icon: Users, href: '/team-availability' },
   { name: 'Reporting', icon: BarChart, href: '/reporting' },
-  { name: 'Resources', icon: FolderOpen, href: '/resources' },
+  { name: 'Roadmap', icon: Map, href: '/roadmap', roles: ['ADMIN', 'MANAGER'] as UserRole[] },
   { name: 'Web Tracker', icon: Eye, href: '/web-tracker' },
   { name: 'Request a Fix', icon: Wrench, href: '/request-fix' },
 ];
@@ -58,14 +58,21 @@ export default function Sidebar() {
     }
   };
 
-  // Add Settings to menu only for ADMIN
+  // Filter menu items by role and add Settings for ADMIN
+  const roleFilteredItems = menuItems.filter(item => {
+    if ('roles' in item && item.roles) {
+      return item.roles.includes(profile?.role as UserRole);
+    }
+    return true;
+  });
+
   const allMenuItems = profile?.role === 'ADMIN' 
     ? [
-        ...menuItems.slice(0, 6), 
+        ...roleFilteredItems.slice(0, roleFilteredItems.findIndex(i => i.name === 'Web Tracker') + 1), 
         { name: 'Settings', icon: Settings, href: '/settings' },
-        ...menuItems.slice(6)
+        ...roleFilteredItems.slice(roleFilteredItems.findIndex(i => i.name === 'Web Tracker') + 1)
       ]
-    : menuItems;
+    : roleFilteredItems;
 
   const allowedRoles = profile?.allowedRoles || [];
   const hasMultipleRoles = allowedRoles.length > 1;
